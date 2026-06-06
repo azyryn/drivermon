@@ -7009,3 +7009,196 @@ img[alt="DriverDex"]{
   });
 })();
 </script>
+
+<script>
+/* v165 TRUE FINAL: shared cross-device Firebase leaderboard. This runs last and overrides old leaderboard patches. */
+(function(){
+  const PROFILE_KEY = "drivermon_player_profile_v1";
+  const PLAYER_ID_KEY = "drivermon_player_id_v1";
+  const SHARED_PATH = "publicLeaderboardPlayers";
+  const FALLBACK_PATHS = ["publicLeaderboardPlayers", "leaderboardPlayers", "players"];
+  let activeTab = "power";
+  let lastRows = [];
+  let listenerStarted = false;
+
+  function esc(v){return String(v==null?"":v).replace(/[&<>\"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[ch]));}
+  function iconDefault(){try{return typeof defaultPlayerIcon === "function" ? defaultPlayerIcon() : "";}catch(e){return "";}}
+  function playerId(){
+    try{
+      let id = localStorage.getItem(PLAYER_ID_KEY);
+      if(!id){ id = "dm_" + Date.now() + "_" + Math.random().toString(36).slice(2,10); localStorage.setItem(PLAYER_ID_KEY, id); }
+      return id;
+    }catch(e){ return "dm_" + Math.random().toString(36).slice(2,10); }
+  }
+  function getProfile(){
+    try{
+      const raw = localStorage.getItem(PROFILE_KEY);
+      if(raw){
+        const p = JSON.parse(raw);
+        return {name: String(p.name || "Player").trim() || "Player", icon: p.icon || iconDefault(), updatedAt:p.updatedAt || null};
+      }
+    }catch(e){}
+    return {name:"Player", icon:iconDefault(), updatedAt:null};
+  }
+  window.getPlayerProfile = getProfile;
+
+  function getCards(){
+    if(typeof drivers !== "undefined" && Array.isArray(drivers)) return drivers;
+    const possibleKeys = ["drivermon_drivers_v1", "drivermon_collection_v1", "drivers", "driverMonCards"];
+    for(const key of possibleKeys){
+      try{
+        const raw = localStorage.getItem(key);
+        if(!raw) continue;
+        const parsed = JSON.parse(raw);
+        if(Array.isArray(parsed)) return parsed;
+        if(parsed && Array.isArray(parsed.drivers)) return parsed.drivers;
+        if(parsed && Array.isArray(parsed.cards)) return parsed.cards;
+      }catch(e){}
+    }
+    return [];
+  }
+  function score(card){
+    try{ if(typeof calc === "function") return Number((calc(card)||{}).score || 0); }catch(e){}
+    return Number(card && (card.score || card.power || card.totalPower || 0));
+  }
+  function stats(){
+    const cards = getCards();
+    let power=0, shiny=0, legendary=0, trader=0;
+    cards.forEach(c=>{
+      const s = score(c); power += s;
+      if(c && c.shiny) shiny++;
+      if(s >= 2500 || String(c && (c.rarity || c.rank || c.quality || "")).toLowerCase().includes("legend")) legendary++;
+      if(c && (c.traded || c.tradeReceivedAt || c.tradeId || c.fromTrade)) trader++;
+    });
+    return {power, cards:cards.length, shiny, legendary, trader};
+  }
+  function buildPayload(){
+    const p = getProfile();
+    return {
+      id: playerId(),
+      name: String(p.name || "Player").slice(0,32),
+      icon: p.icon || iconDefault(),
+      stats: stats(),
+      updatedAt: new Date().toISOString(),
+      version: "v165"
+    };
+  }
+  function publishPlayerStats(){
+    const data = buildPayload();
+    if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve(data);
+    // Write to the new shared path AND the older paths so older phone/laptop tabs can still see it.
+    const paths = Array.from(new Set([SHARED_PATH, "leaderboardPlayers", "players"]));
+    return Promise.all(paths.map(path => tradeDb.ref(path + "/" + data.id).set(data).catch(err=>({path, err})))).then(()=>data);
+  }
+  window.publishPlayerStats = publishPlayerStats;
+
+  function metric(tab){return ({power:"Total Power",cards:"Cards",shiny:"Shiny Cards",legendary:"Legendary Cards",trader:"Trades"})[tab] || "Score";}
+  function value(row, tab){return Number(row && row.stats && row.stats[tab] || 0);}
+  function combineRows(results){
+    const byId = {};
+    results.forEach(obj=>{
+      Object.keys(obj || {}).forEach(id=>{
+        const row = Object.assign({id}, obj[id]);
+        if(!row || !row.name) return;
+        byId[id] = Object.assign(byId[id] || {}, row);
+      });
+    });
+    return Object.values(byId);
+  }
+  function render(tab, rows, note){
+    activeTab = tab || activeTab || "power";
+    const content = document.getElementById("leaderboardContent");
+    if(!content) return;
+    const list = (rows || []).map(r=>({
+      id:r.id,
+      name:r.name || "Player",
+      icon:r.icon || iconDefault(),
+      value:value(r, activeTab),
+      cards:value(r,"cards"),
+      updatedAt:r.updatedAt || ""
+    })).filter(r=> activeTab === "cards" ? r.cards >= 0 : r.value > 0)
+      .sort((a,b)=>b.value-a.value)
+      .slice(0,20);
+    if(!list.length){
+      const mine = buildPayload();
+      content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">No other players loaded yet</div><div class="leaderMeta">This device published as ${esc(mine.name)}. ${note ? esc(note) : "Open this SAME uploaded index.html on the other device and save its profile once."}</div></div><div class="leaderScore"><div class="leaderScoreValue">${mine.stats.cards}</div><div class="leaderScoreLabel">Your Cards</div></div></div>`;
+      return;
+    }
+    content.innerHTML = list.map((e,i)=>{
+      const cls = i===0 ? "goldLeader" : i===1 ? "silverLeader" : i===2 ? "bronzeLeader" : "";
+      return `<div class="leaderEntry ${cls}"><div class="leaderRank">#${i+1}</div><img src="${e.icon}" alt="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid white;margin-right:8px;"><div class="leaderMain"><div class="leaderName">${esc(e.name)}</div><div class="leaderMeta">${e.id===playerId()?"This device":"Shared player"}${e.updatedAt ? " · " + esc(new Date(e.updatedAt).toLocaleString()) : ""}</div></div><div class="leaderScore"><div class="leaderScoreValue">${e.value.toLocaleString()}</div><div class="leaderScoreLabel">${metric(activeTab)}</div></div></div>`;
+    }).join("");
+  }
+  function loadSharedRows(){
+    if(typeof tradeDb === "undefined" || !tradeDb){
+      lastRows = [buildPayload()]; render(activeTab, lastRows, "Firebase did not load."); return Promise.resolve(lastRows);
+    }
+    return Promise.all(FALLBACK_PATHS.map(path => tradeDb.ref(path).once("value").then(s=>s.val() || {}).catch(err=>({__error:String(err && err.message || err)}))))
+      .then(results=>{
+        const errors = results.filter(r=>r && r.__error).map(r=>r.__error);
+        lastRows = combineRows(results.filter(r=>!r.__error));
+        // Always include this device immediately, even before Firebase roundtrip catches up.
+        const mine = buildPayload();
+        const i = lastRows.findIndex(r=>r.id===mine.id);
+        if(i>=0) lastRows[i]=mine; else lastRows.push(mine);
+        render(activeTab, lastRows, errors.length ? "Firebase read issue: " + errors[0] : "");
+        return lastRows;
+      });
+  }
+  function startLiveListener(){
+    if(listenerStarted || typeof tradeDb === "undefined" || !tradeDb) return;
+    listenerStarted = true;
+    tradeDb.ref(SHARED_PATH).on("value", snap=>{
+      const rows = combineRows([snap.val() || {}]);
+      if(rows.length){ lastRows = rows; render(activeTab, lastRows); }
+    }, err=>{ console.log("leaderboard live read failed", err); });
+  }
+
+  window.showLeaderboardTab = function(tab){
+    activeTab = tab || "power";
+    const content = document.getElementById("leaderboardContent");
+    if(content) content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Syncing leaderboard...</div><div class="leaderMeta">Publishing this device and loading all shared players.</div></div></div>`;
+    return publishPlayerStats().then(()=>loadSharedRows()).then(()=>startLiveListener());
+  };
+  window.openLeaderboard = function(){
+    const overlay = document.getElementById("leaderboardOverlay");
+    if(overlay) overlay.style.display = "block";
+    window.showLeaderboardTab("power");
+  };
+
+  function updateProfileUI(p){
+    p = p || getProfile();
+    const preview=document.getElementById("playerIconPreview"), input=document.getElementById("playerNameInput"), topIcon=document.getElementById("playerTopIcon"), topName=document.getElementById("playerTopName");
+    if(preview) preview.src = p.icon || iconDefault();
+    if(input) input.value = p.name || "Player";
+    if(topIcon) topIcon.src = p.icon || iconDefault();
+    if(topName) topName.textContent = p.name || "Player";
+  }
+  window.setPlayerProfileUI = updateProfileUI;
+  window.updatePlayerTopTile = function(){updateProfileUI(getProfile());};
+
+  // Keep the now-working image upload behaviour, but make sure saving publishes to Firebase.
+  const previousPreview = window.previewPlayerIcon;
+  window.previewPlayerIcon = function(event){
+    if(typeof previousPreview === "function") return previousPreview(event);
+  };
+  window.savePlayerProfile = function(){
+    const nameInput=document.getElementById("playerNameInput"), status=document.getElementById("playerProfileStatus");
+    const old=getProfile();
+    const name=(nameInput && nameInput.value ? nameInput.value : old.name || "Player").trim() || "Player";
+    const icon=window.pendingPlayerIcon || document.getElementById("playerIconPreview")?.src || old.icon || iconDefault();
+    const p={name, icon, updatedAt:new Date().toISOString()};
+    try{ localStorage.setItem(PROFILE_KEY, JSON.stringify(p)); window.pendingPlayerIcon=null; updateProfileUI(p); if(status) status.textContent="Saved and published: " + name; }
+    catch(e){ if(status) status.textContent="Could not save profile."; }
+    publishPlayerStats().then(()=>loadSharedRows());
+    if(typeof closePlayerProfileEditor === "function") closePlayerProfileEditor();
+  };
+
+  const oldSave=window.saveCollection;
+  if(typeof oldSave === "function") window.saveCollection=function(){const r=oldSave.apply(this,arguments); setTimeout(publishPlayerStats,80); return r;};
+  const oldRender=window.renderCards;
+  if(typeof oldRender === "function") window.renderCards=function(){const r=oldRender.apply(this,arguments); clearTimeout(window.__dmV165Pub); window.__dmV165Pub=setTimeout(publishPlayerStats,700); return r;};
+
+  window.addEventListener("load", function(){ updateProfileUI(getProfile()); publishPlayerStats().then(loadSharedRows); });
+})();
+</script>
