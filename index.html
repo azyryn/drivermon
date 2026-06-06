@@ -6632,3 +6632,131 @@ img[alt="DriverDex"]{
   window.addEventListener("load", function(){ setTimeout(publishPlayerStats, 900); });
 })();
 </script>
+
+<script>
+/* v168 REAL DriverDex override: removes temporary regional demo cards and uses Firebase discoveredCards only */
+(function(){
+  window.DEMO_UNDISCOVERED_BY_REGION = {};
+  window.forceIntroPopupForDemo = function(){};
+  window.sampleUndiscoveredForRegion = function(){ return []; };
+
+  function safeCalc(card){
+    try { return (typeof calc === "function") ? calc(card) : {score:0, level:"?"}; }
+    catch(e){ return {score:0, level:"?"}; }
+  }
+  function safeRarity(score, manual){
+    try { return (typeof rarity === "function") ? rarity(score, manual) : "Common"; }
+    catch(e){ return "Common"; }
+  }
+  function safeDexKey(card){
+    try { return (typeof dexKey === "function") ? dexKey(card) : ((card && (card.uid || card.name)) || ""); }
+    catch(e){ return (card && (card.uid || card.name)) || ""; }
+  }
+  function realOwnedKeys(){
+    const set = new Set();
+    try {
+      if(Array.isArray(drivers)) drivers.forEach(card => set.add(safeDexKey(card)));
+    } catch(e) {}
+    return set;
+  }
+  function realUserRegion(){
+    try { return (typeof getUserRegion === "function") ? getUserRegion() : (localStorage.getItem("drivermon_user_region") || ""); }
+    catch(e){ return ""; }
+  }
+  function matchesRegion(card, region){
+    try { return (typeof regionMatchesUser === "function") ? regionMatchesUser(card, region) : (!region || (card && card.region === region)); }
+    catch(e){ return !region || (card && card.region === region); }
+  }
+  function ownedCardHtml(card){
+    if(typeof userDexCard === "function") return userDexCard(card);
+    const c = safeCalc(card);
+    const r = safeRarity(c.score, card && card.manualRarity);
+    const img = (typeof faceImages !== "undefined" && card && faceImages[card.img]) ? faceImages[card.img] : "";
+    return `<div class="dexCard ${r}${card && card.shiny ? " shinyDex" : ""}">
+      ${img ? `<img src="${img}" alt="${card.name || "DriverMon"}">` : `<div class="dexMysteryIcon">?</div>`}
+      <div class="dexName">${card && card.shiny ? "✨ " : ""}${card && card.name ? card.name : "Unknown"}</div>
+      <div class="dexMeta">LVL ${c.level || "?"}<br>${r}</div>
+    </div>`;
+  }
+  function realUndiscoveredCardHtml(card){
+    const c = safeCalc(card);
+    const r = safeRarity(c.score, card && card.manualRarity);
+    const regionText = card && card.region ? `<span class="dexRegionNote">${card.region}${card.country ? " · " + card.country : ""}</span>` : "";
+    return `<div class="dexCard dexUndiscovered ${r}">
+      <div class="dexMysteryIcon">?</div>
+      <div class="dexName">${card && card.name ? card.name : "Unknown Driver"}</div>
+      <div class="dexMeta">LVL ${c.level || "?"}<br>${r}${regionText}</div>
+    </div>`;
+  }
+
+  window.loadDriverDex = function(){
+    const grid = document.getElementById("driverDexGrid");
+    const userRegion = realUserRegion();
+    const localCards = Array.isArray(window.drivers || drivers) ? (window.drivers || drivers).slice() : [];
+    const ownedKeys = realOwnedKeys();
+
+    if(grid) grid.innerHTML = `<div class="dexLoading">Loading real DriverDex data...</div>`;
+
+    function render(globalList){
+      const realGlobalCards = (globalList || []).filter(card => card && !card.demoUndiscovered && !String(card.uid || "").startsWith("demo_undiscovered_"));
+      const regionalPool = userRegion ? realGlobalCards.filter(card => matchesRegion(card, userRegion)) : realGlobalCards;
+      const undiscoveredRegional = regionalPool.filter(card => {
+        const key = safeDexKey(card);
+        return key && !ownedKeys.has(key);
+      });
+
+      const ownedHtml = localCards.length
+        ? `<div class="dexSectionTitle">Your Cards</div>` + localCards.map(ownedCardHtml).join("")
+        : `<div class="dexSectionTitle">Your Cards</div><div class="dexLoading">No cards in your collection yet.</div>`;
+
+      const regionTitle = userRegion ? `Real discoveries from ${userRegion} you do not own yet` : "Real worldwide discoveries you do not own yet";
+      const undiscoveredHtml = `<div class="dexSectionTitle">${regionTitle}</div>` +
+        (undiscoveredRegional.length
+          ? undiscoveredRegional.map(realUndiscoveredCardHtml).join("")
+          : `<div class="dexLoading">No real Firebase discoveries here yet. Create or trade cards on another device, then reopen DriverDex.</div>`);
+
+      if(grid) grid.innerHTML = ownedHtml + undiscoveredHtml;
+
+      const disc = document.getElementById("dexDiscoveredCount");
+      const shiny = document.getElementById("dexShinyCount");
+      const leg = document.getElementById("dexLegendaryCount");
+      const worldwide = document.getElementById("dexWorldwideCount");
+      const mini = document.getElementById("dexMiniStat");
+
+      const localShiny = localCards.filter(c => c && c.shiny).length;
+      const localLegendary = localCards.filter(c => {
+        const score = safeCalc(c).score || 0;
+        return score >= 2500 || (c && c.manualRarity === "Legendary");
+      }).length;
+
+      if(disc) disc.textContent = `${localCards.length} your cards`;
+      if(shiny) shiny.textContent = `${localShiny} shiny`;
+      if(leg) leg.textContent = `${localLegendary} legendary`;
+      if(worldwide) worldwide.textContent = `${realGlobalCards.length} worldwide`;
+      if(mini) mini.textContent = userRegion ? `${userRegion}: ${undiscoveredRegional.length} real unowned discoveries` : `${undiscoveredRegional.length} real unowned discoveries`;
+    }
+
+    if(typeof tradeDb === "undefined" || !tradeDb){
+      render([]);
+      return;
+    }
+
+    tradeDb.ref("discoveredCards").once("value").then(snapshot => {
+      const raw = snapshot.val() || {};
+      const list = Object.values(raw).sort((a,b)=>(safeCalc(b).score || 0) - (safeCalc(a).score || 0));
+      render(list);
+    }).catch(err => {
+      console.log("DriverDex Firebase read failed", err);
+      if(grid) grid.innerHTML = `<div class="dexSectionTitle">Your Cards</div>` + (localCards.length ? localCards.map(ownedCardHtml).join("") : `<div class="dexLoading">No cards in your collection yet.</div>`) + `<div class="dexLoading">DriverDex could not read Firebase discoveries: ${err && err.message ? err.message : err}</div>`;
+    });
+  };
+
+  const oldOpenDriverDexV168 = window.openDriverDex;
+  if(typeof oldOpenDriverDexV168 === "function"){
+    window.openDriverDex = function(){
+      oldOpenDriverDexV168();
+      setTimeout(window.loadDriverDex, 80);
+    };
+  }
+})();
+</script>
