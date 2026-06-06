@@ -8548,7 +8548,7 @@ img[alt="DriverDex"]{
 })();
 </script>
 
-<!-- v178: simpler player collection view. No popup. Click leaderboard profile picture to replace leaderboard with that player's cards. Runs last. -->
+<!-- v179: mini real cards in player collection view. No popup. Click leaderboard profile picture to replace leaderboard with that player's cards. Runs last. -->
 <script>
 (function(){
   const LB_PATH = "trades/__leaderboardPlayers";
@@ -8656,10 +8656,18 @@ img[alt="DriverDex"]{
       </div>`;
     }).join("") : `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">No players yet</div><div class="leaderMeta">No public Firebase players were found.</div></div></div>`;
   }
+  function rarityClass(c){
+    const r = String(c.rarity || c.manualRarity || c.rank || "Common").trim();
+    const clean = r.replace(/[^a-zA-Z0-9_-]/g,"");
+    return clean || "Common";
+  }
   function cardHtml(c){
     const img=cardImage(c) || c.image;
-    const face=img ? `<img src="${esc(img)}" alt="${esc(cardName(c))}" style="width:92px;height:92px;border-radius:50%;object-fit:cover;border:3px solid white;background:#111;margin:0 auto 8px;display:block;">` : `<div style="width:92px;height:92px;border-radius:50%;border:3px solid white;background:#111;margin:0 auto 8px;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:1000;">?</div>`;
-    return `<div class="v178PlayerCard">${face}<div class="v178PlayerCardName">${c.shiny?"✨ ":""}${esc(cardName(c))}</div><div class="v178PlayerCardMeta">${esc(cardRegion(c))}<br>${esc(c.rarity || "Common")} • LVL ${esc(c.level || "?")}<br>${Number(c.score||0).toLocaleString()} power</div></div>`;
+    const type = String(c.type || c.element || "Type").trim() || "Type";
+    const level = String(c.level || c.nameRank || "?").trim() || "?";
+    const rClass = rarityClass(c);
+    const face=img ? `<div class="v179MiniFace"><img src="${esc(img)}" alt="${esc(cardName(c))}"></div>` : `<div class="v179MiniFace v179MiniFaceMissing">?</div>`;
+    return `<div class="v178PlayerCard v179MiniCard ${esc(rClass)} ${c.shiny ? "shiny" : ""}"><div class="v179MiniTop"><span class="v179MiniType">${esc(type)}</span><span class="v179MiniLevel">LVL ${esc(level)}</span></div>${face}<div class="v178PlayerCardName v179MiniName">${c.shiny?"✨ ":""}${esc(cardName(c))}</div></div>`;
   }
   function renderCollectionPage(player){
     const content=document.getElementById("leaderboardContent"); if(!content) return;
@@ -8679,7 +8687,7 @@ img[alt="DriverDex"]{
   function ensureCss(){
     if(document.getElementById("v178CollectionCss")) return;
     const css=document.createElement("style"); css.id="v178CollectionCss";
-    css.textContent=`.v178CollectionHeader{display:flex;gap:14px;align-items:center;background:rgba(0,20,60,.82);border:2px solid rgba(255,255,255,.18);border-radius:18px;padding:12px;margin-bottom:14px}.v178CollectionHeader button{background:linear-gradient(180deg,#ffdf38,#ffb000)!important;color:#1c1c1c!important;box-shadow:0 4px 0 rgba(0,0,0,.28)!important}.v178CollectionTitle{font-size:26px;font-weight:1000;color:#ffdf38;text-shadow:2px 2px 0 #003b86;line-height:1}.v178CollectionMeta{font-weight:900;opacity:.9;margin-top:4px}.v178PlayerGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}.v178PlayerCard{border:3px solid white;border-radius:18px;background:rgba(255,255,255,.12);padding:10px;text-align:center;box-shadow:0 7px 0 rgba(0,0,0,.25);min-height:220px}.v178PlayerCardName{font-size:15px;line-height:1;font-weight:1000;text-transform:uppercase;color:#ffdf38}.v178PlayerCardMeta{font-size:11px;font-weight:900;line-height:1.25;margin-top:6px}@media(max-width:700px){.v178CollectionHeader{align-items:flex-start;flex-direction:column}.v178PlayerGrid{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}}`;
+    css.textContent=`.v178CollectionHeader{display:flex;gap:14px;align-items:center;background:rgba(0,20,60,.82);border:2px solid rgba(255,255,255,.18);border-radius:18px;padding:12px;margin-bottom:14px}.v178CollectionHeader button{background:linear-gradient(180deg,#ffdf38,#ffb000)!important;color:#1c1c1c!important;box-shadow:0 4px 0 rgba(0,0,0,.28)!important}.v178CollectionTitle{font-size:26px;font-weight:1000;color:#ffdf38;text-shadow:2px 2px 0 #003b86;line-height:1}.v178CollectionMeta{font-weight:900;opacity:.9;margin-top:4px}.v178PlayerGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:12px}.v178PlayerCard{position:relative;border:3px solid white;border-radius:18px;background:rgba(255,255,255,.12);padding:10px;text-align:center;box-shadow:0 7px 0 rgba(0,0,0,.25);min-height:178px;overflow:hidden}.v178PlayerCardName{font-size:15px;line-height:1;font-weight:1000;text-transform:uppercase;color:#ffdf38}.v178PlayerCardMeta{font-size:11px;font-weight:900;line-height:1.25;margin-top:6px}.v179MiniCard:before{content:"";position:absolute;inset:0;background:linear-gradient(135deg,rgba(255,255,255,.25),transparent 28%,rgba(255,255,255,.12) 55%,transparent),radial-gradient(circle at top right,rgba(255,255,255,.38),transparent 22%);opacity:.75;pointer-events:none}.v179MiniCard>*{position:relative;z-index:1}.v179MiniCard.Diamond{background:linear-gradient(135deg,#073b66,#0d93d7 55%,#062642);border-color:#62ddff}.v179MiniCard.Platinum{background:linear-gradient(135deg,#3a1663,#ac4cff 60%,#25003c);border-color:#df9cff}.v179MiniCard.Gold{background:linear-gradient(135deg,#684800,#ffc400 55%,#5c3200);border-color:#ffe45c}.v179MiniCard.Silver{background:linear-gradient(135deg,#30343b,#929ba6 55%,#1c1f25);border-color:#dce4eb}.v179MiniCard.Bronze{background:linear-gradient(135deg,#4f2100,#b85f17 55%,#2b1200);border-color:#ff9d3c}.v179MiniCard.Final{background:linear-gradient(135deg,#011d54,#00d4ff 25%,#ffe600 55%,#ff2994);border-color:#fff44a}.v179MiniCard.shiny{background:linear-gradient(135deg,#ffe45c 0%,#ff5fd7 18%,#43dfff 36%,#6eff8c 54%,#fff45e 70%,#ff8f2d 86%,#b35cff 100%)!important;border-color:#fff4a8!important;box-shadow:0 0 0 3px rgba(255,255,255,.75),0 0 22px rgba(255,230,80,.9),0 7px 0 rgba(0,0,0,.25)!important}.v179MiniTop{display:flex;justify-content:space-between;gap:5px;align-items:center;margin-bottom:8px}.v179MiniType,.v179MiniLevel{background:rgba(0,0,0,.34);border:1px solid rgba(255,255,255,.45);border-radius:999px;padding:4px 6px;font-size:10px;font-weight:1000;color:white;line-height:1;white-space:nowrap}.v179MiniFace{width:76px;height:76px;border-radius:50%;border:3px solid white;background:#111;margin:0 auto 8px;display:flex;align-items:center;justify-content:center;overflow:hidden;box-shadow:0 0 0 3px rgba(0,0,0,.28)}.v179MiniFace img{width:100%;height:100%;object-fit:cover;display:block}.v179MiniFaceMissing{font-size:34px;font-weight:1000;color:white}.v179MiniName{font-size:13px!important;color:white!important;text-shadow:2px 2px 0 rgba(0,0,0,.45);margin-top:4px}@media(max-width:700px){.v178CollectionHeader{align-items:flex-start;flex-direction:column}.v178PlayerGrid{grid-template-columns:repeat(auto-fill,minmax(116px,1fr))}.v179MiniFace{width:66px;height:66px}.v179MiniType,.v179MiniLevel{font-size:9px;padding:3px 5px}.v179MiniName{font-size:12px!important}}`;
     document.head.appendChild(css);
   }
   window.showLeaderboardTab = function(metric){
