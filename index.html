@@ -6487,3 +6487,255 @@ img[alt="DriverDex"]{
     display:block !important;
 }
 </style>
+
+<script>
+/* v162 real Firebase leaderboard + replaceable player profile image */
+(function(){
+  const PROFILE_KEY = "drivermon_player_profile_v1";
+  const PLAYER_ID_KEY = "drivermon_player_id_v1";
+  let currentLeaderboardTab = "power";
+  let leaderboardRowsCache = [];
+
+  function safeText(value){
+    return String(value == null ? "" : value)
+      .replace(/&/g,"&amp;")
+      .replace(/</g,"&lt;")
+      .replace(/>/g,"&gt;")
+      .replace(/"/g,"&quot;")
+      .replace(/'/g,"&#039;");
+  }
+
+  function getPlayerId(){
+    try{
+      let id = localStorage.getItem(PLAYER_ID_KEY);
+      if(!id){
+        id = "player_" + Date.now() + "_" + Math.random().toString(36).slice(2,10);
+        localStorage.setItem(PLAYER_ID_KEY, id);
+      }
+      return id;
+    }catch(err){
+      return "player_" + Math.random().toString(36).slice(2,10);
+    }
+  }
+
+  function smallDefaultIcon(){
+    if(typeof defaultPlayerIcon === "function") return defaultPlayerIcon();
+    return "";
+  }
+
+  window.getPlayerProfile = function(){
+    try{
+      const raw = localStorage.getItem(PROFILE_KEY);
+      if(raw){
+        const p = JSON.parse(raw);
+        return {name:p.name || "Player", icon:p.icon || smallDefaultIcon(), updatedAt:p.updatedAt || null};
+      }
+    }catch(err){ console.log(err); }
+    return {name:"Player", icon:smallDefaultIcon()};
+  };
+
+  function collectionStats(){
+    const cards = (typeof drivers !== "undefined" && Array.isArray(drivers)) ? drivers : [];
+    let power = 0;
+    let shiny = 0;
+    let legendary = 0;
+    let traded = 0;
+
+    cards.forEach(card=>{
+      try{
+        if(typeof calc === "function"){
+          const c = calc(card);
+          power += Number(c.score || 0);
+          if(Number(c.score || 0) >= 2500) legendary += 1;
+        }else{
+          power += Number(card.power || card.score || 0);
+        }
+      }catch(err){}
+      if(card && card.shiny) shiny += 1;
+      if(card && (card.traded || card.tradeReceivedAt)) traded += 1;
+      if(card && String(card.rarity || card.rank || "").toLowerCase().includes("legend")) legendary += 1;
+    });
+
+    return {power, cards:cards.length, shiny, legendary, trader:traded};
+  }
+
+  function publishPlayerStats(){
+    if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve();
+    const profile = getPlayerProfile();
+    const stats = collectionStats();
+    const payload = {
+      name: (profile.name || "Player").slice(0,32),
+      icon: profile.icon || smallDefaultIcon(),
+      stats,
+      updatedAt: new Date().toISOString()
+    };
+    return tradeDb.ref("players/" + getPlayerId()).update(payload).catch(err=>console.log("Leaderboard publish failed", err));
+  }
+
+  function metricLabel(tab){
+    return ({power:"Total Power",cards:"Cards",shiny:"Shiny Cards",legendary:"Legendary Cards",trader:"Trades"})[tab] || "Score";
+  }
+
+  function valueFor(row, tab){
+    return Number(row && row.stats && row.stats[tab] ? row.stats[tab] : 0);
+  }
+
+  function renderRealLeaderboard(tab, rows){
+    const content = document.getElementById("leaderboardContent");
+    if(!content) return;
+    const list = (rows || [])
+      .map(row=>({
+        name: row.name || "Player",
+        icon: row.icon || smallDefaultIcon(),
+        value: valueFor(row, tab),
+        meta: row.updatedAt ? "Updated " + new Date(row.updatedAt).toLocaleDateString() : "Player stats"
+      }))
+      .filter(entry=>entry.value > 0 || tab === "cards")
+      .sort((a,b)=>b.value-a.value)
+      .slice(0,10);
+
+    if(!list.length){
+      content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">No real players yet</div><div class="leaderMeta">Save a player profile or create cards on another device, then reopen the leaderboard.</div></div></div>`;
+      return;
+    }
+
+    content.innerHTML = list.map((entry,index)=>{
+      const cls = index === 0 ? "goldLeader" : index === 1 ? "silverLeader" : index === 2 ? "bronzeLeader" : "";
+      return `<div class="leaderEntry ${cls}">
+        <div class="leaderRank">#${index + 1}</div>
+        <img src="${entry.icon}" alt="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid white;margin-right:8px;">
+        <div class="leaderMain">
+          <div class="leaderName">${safeText(entry.name)}</div>
+          <div class="leaderMeta">${safeText(entry.meta)}</div>
+        </div>
+        <div class="leaderScore">
+          <div class="leaderScoreValue">${entry.value.toLocaleString()}</div>
+          <div class="leaderScoreLabel">${metricLabel(tab)}</div>
+        </div>
+      </div>`;
+    }).join("");
+  }
+
+  window.showLeaderboardTab = function(tab){
+    currentLeaderboardTab = tab || "power";
+    const content = document.getElementById("leaderboardContent");
+    if(content) content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Loading real leaderboard...</div><div class="leaderMeta">Pulling player stats from Firebase.</div></div></div>`;
+
+    publishPlayerStats().finally(()=>{
+      if(typeof tradeDb === "undefined" || !tradeDb){
+        renderRealLeaderboard(currentLeaderboardTab, [Object.assign(getPlayerProfile(), {stats:collectionStats(), updatedAt:new Date().toISOString()})]);
+        return;
+      }
+      tradeDb.ref("players").once("value").then(snapshot=>{
+        const data = snapshot.val() || {};
+        leaderboardRowsCache = Object.keys(data).map(id=>Object.assign({id}, data[id]));
+        renderRealLeaderboard(currentLeaderboardTab, leaderboardRowsCache);
+      }).catch(err=>{
+        console.log("Leaderboard load failed", err);
+        renderRealLeaderboard(currentLeaderboardTab, [Object.assign(getPlayerProfile(), {stats:collectionStats(), updatedAt:new Date().toISOString()})]);
+      });
+    });
+  };
+
+  window.openLeaderboard = function(){
+    const overlay = document.getElementById("leaderboardOverlay");
+    if(overlay) overlay.style.display = "block";
+    showLeaderboardTab("power");
+  };
+
+  function updateProfileEverywhere(profile){
+    const p = profile || getPlayerProfile();
+    const preview = document.getElementById("playerIconPreview");
+    const input = document.getElementById("playerNameInput");
+    const topIcon = document.getElementById("playerTopIcon");
+    const topName = document.getElementById("playerTopName");
+    if(preview) preview.src = p.icon || smallDefaultIcon();
+    if(input) input.value = p.name || "Player";
+    if(topIcon) topIcon.src = p.icon || smallDefaultIcon();
+    if(topName) topName.textContent = p.name || "Player";
+  }
+
+  window.setPlayerProfileUI = function(profile){ updateProfileEverywhere(profile); };
+  window.updatePlayerTopTile = function(){ updateProfileEverywhere(getPlayerProfile()); };
+
+  window.previewPlayerIcon = function(event){
+    const input = event && event.target;
+    const file = input && input.files && input.files[0];
+    if(!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e){
+      const img = new Image();
+      img.onload = function(){
+        const canvas = document.createElement("canvas");
+        const size = 220;
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        const scale = Math.max(size / img.width, size / img.height);
+        const w = img.width * scale;
+        const h = img.height * scale;
+        ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+        window.pendingPlayerIcon = dataUrl;
+        const preview = document.getElementById("playerIconPreview");
+        if(preview) preview.src = dataUrl;
+        if(input) input.value = "";
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  window.savePlayerProfile = function(){
+    const nameInput = document.getElementById("playerNameInput");
+    const status = document.getElementById("playerProfileStatus");
+    const oldProfile = getPlayerProfile();
+    const name = (nameInput && nameInput.value ? nameInput.value : oldProfile.name || "Player").trim() || "Player";
+    const icon = window.pendingPlayerIcon || (document.getElementById("playerIconPreview")?.src) || oldProfile.icon || smallDefaultIcon();
+    const profile = {name, icon, updatedAt:new Date().toISOString()};
+
+    try{
+      localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+      window.pendingPlayerIcon = null;
+      updateProfileEverywhere(profile);
+      if(status) status.textContent = `Saved: ${name}`;
+      publishPlayerStats().then(()=>{
+        if(currentLeaderboardTab) showLeaderboardTab(currentLeaderboardTab);
+      });
+      if(typeof closePlayerProfileEditor === "function") closePlayerProfileEditor();
+    }catch(err){
+      console.log("Profile save failed", err);
+      if(status) status.textContent = "Could not save profile image. Try a smaller picture.";
+    }
+  };
+
+  const oldSaveCollectionV162 = window.saveCollection;
+  if(typeof oldSaveCollectionV162 === "function"){
+    window.saveCollection = function(){
+      const result = oldSaveCollectionV162.apply(this, arguments);
+      publishPlayerStats();
+      return result;
+    };
+  }
+
+  const oldRenderCardsV162 = window.renderCards;
+  if(typeof oldRenderCardsV162 === "function"){
+    window.renderCards = function(){
+      const result = oldRenderCardsV162.apply(this, arguments);
+      clearTimeout(window.__leaderboardPublishTimer);
+      window.__leaderboardPublishTimer = setTimeout(publishPlayerStats, 500);
+      return result;
+    };
+  }
+
+  window.addEventListener("load", function(){
+    updateProfileEverywhere(getPlayerProfile());
+    publishPlayerStats();
+    const iconInput = document.getElementById("playerIconInput");
+    if(iconInput){
+      iconInput.addEventListener("click", function(){ this.value = ""; });
+    }
+  });
+})();
+</script>
