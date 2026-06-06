@@ -482,6 +482,19 @@ const firebaseConfig = {
 
 firebase.initializeApp(firebaseConfig);
 const tradeDb = firebase.database();
+
+/* v167: Redirect old blocked leaderboard Firebase paths to the shared trading path. */
+(function(){
+  try{
+    const _oldRef = tradeDb.ref.bind(tradeDb);
+    tradeDb.ref = function(path){
+      if(typeof path === "string" && (path === "publicLeaderboardPlayers" || path === "/publicLeaderboardPlayers" || path === "players" || path === "/players")){
+        path = "trades/__leaderboardPlayers";
+      }
+      return _oldRef(path);
+    };
+  }catch(e){ console.log("Leaderboard path redirect not installed", e); }
+})();
 </script>
 
 </head>
@@ -6491,7 +6504,7 @@ img[alt="DriverDex"]{
 <script>
 /* v166 FINAL FIREBASE RULES WORKAROUND
    Uses the already-working trades path for shared leaderboard player records.
-   This avoids permission_denied on /publicLeaderboardPlayers or /players. */
+   This avoids Firebase permission errors on older leaderboard paths. */
 (function(){
   const LB_PATH = "trades/__leaderboardPlayers";
   const PROFILE_KEY = "drivermonPlayerProfile";
