@@ -2832,7 +2832,44 @@ function loadDriverDex(){
 
 <script>
 /* === DRIVERMON LEADERBOARD SAMPLE === */
-const SAMPLE_LEADERBOARD = {power:[],cards:[],shiny:[],legendary:[],trader:[]};
+const SAMPLE_LEADERBOARD = {
+  power: [
+    {name:"TURBO TOM", value:98740, meta:"41 legendary cards • 7 shiny"},
+    {name:"RANI RIDER", value:91210, meta:"38 legendary cards • 5 shiny"},
+    {name:"THE CURRY KING", value:84520, meta:"32 legendary cards • 9 shiny"},
+    {name:"UBERLORD99", value:80440, meta:"Top DriverDex hunter"},
+    {name:"LATE NIGHT LEO", value:77610, meta:"Most active trader"}
+  ],
+  cards: [
+    {name:"MEALMANCER", value:382, meta:"Largest DriverMon collection"},
+    {name:"BIKE BANDIT", value:344, meta:"Collects duplicate evolutions"},
+    {name:"RANI RIDER", value:321, meta:"Top female collector"},
+    {name:"TURBO TOM", value:310, meta:"Legendary hunter"},
+    {name:"MIDNIGHT MUNCH", value:288, meta:"Most trades completed"}
+  ],
+  shiny: [
+    {name:"THE CURRY KING", value:9, meta:"Most shiny DriverMon"},
+    {name:"UBERLORD99", value:8, meta:"Global shiny hunter"},
+    {name:"RANI RIDER", value:5, meta:"Shiny specialist"},
+    {name:"TURBO TOM", value:4, meta:"Found rare shiny evolutions"},
+    {name:"MEALMANCER", value:3, meta:"High shiny trade activity"}
+  ],
+  legendary: [
+    {name:"TURBO TOM", value:41, meta:"Most legendary DriverMon"},
+    {name:"RANI RIDER", value:38, meta:"Fastest legendary growth"},
+    {name:"UBERLORD99", value:35, meta:"Most global discoveries"},
+    {name:"THE CURRY KING", value:32, meta:"Top lore collection"},
+    {name:"MIDNIGHT MUNCH", value:28, meta:"Top night-shift cards"}
+  ],
+  trader: [
+    {name:"MIDNIGHT MUNCH", value:140, meta:"Most completed trades"},
+    {name:"BIKE BANDIT", value:121, meta:"Most duplicate swaps"},
+    {name:"RANI RIDER", value:119, meta:"Highest trade rating"},
+    {name:"MEALMANCER", value:102, meta:"Fastest trader"},
+    {name:"UBERLORD99", value:96, meta:"Most rare trades"}
+  ]
+};
+
 function openLeaderboard(){
   const overlay = document.getElementById("leaderboardOverlay");
   if(overlay) overlay.style.display = "block";
@@ -6029,313 +6066,6 @@ window.addEventListener("DOMContentLoaded", function(){
 })();
 </script>
 
-
-
-<script>
-/* v163 HARD FIX: real-only Firebase leaderboard, no fake/sample names */
-(function(){
-  const PROFILE_KEY = "drivermon_player_profile_v1";
-  const PLAYER_ID_KEY = "drivermon_player_id_v1";
-  const FAKE_NAMES = new Set([
-    "TURBO TOM","RANI RIDER","THE CURRY KING","UBERLORD99","LATE NIGHT LEO",
-    "MEALMANCER","BIKE BANDIT","MIDNIGHT MUNCH"
-  ]);
-  let currentTab = "power";
-
-  function esc(v){
-    return String(v == null ? "" : v).replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[ch]));
-  }
-  function defaultIcon(){
-    if(typeof defaultPlayerIcon === "function") return defaultPlayerIcon();
-    return "";
-  }
-  function getId(){
-    try{
-      let id = localStorage.getItem(PLAYER_ID_KEY);
-      if(!id){ id = "player_" + Date.now() + "_" + Math.random().toString(36).slice(2,10); localStorage.setItem(PLAYER_ID_KEY,id); }
-      return id;
-    }catch(e){ return "player_" + Math.random().toString(36).slice(2,10); }
-  }
-  window.getPlayerProfile = function(){
-    try{
-      const raw = localStorage.getItem(PROFILE_KEY);
-      if(raw){
-        const p = JSON.parse(raw);
-        return {name:(p.name || "Player"), icon:(p.icon || defaultIcon()), updatedAt:p.updatedAt || null};
-      }
-    }catch(e){}
-    return {name:"Player", icon:defaultIcon()};
-  };
-  function stats(){
-    const cards = (typeof drivers !== "undefined" && Array.isArray(drivers)) ? drivers : [];
-    let power=0, shiny=0, legendary=0, trader=0;
-    cards.forEach(card=>{
-      let score = 0;
-      try{
-        if(typeof calc === "function") score = Number((calc(card)||{}).score || 0);
-        else score = Number(card.power || card.score || 0);
-      }catch(e){ score = Number(card.power || card.score || 0); }
-      power += score;
-      if(card && card.shiny) shiny++;
-      if(score >= 2500 || String(card && (card.rarity || card.rank || "")).toLowerCase().includes("legend")) legendary++;
-      if(card && (card.traded || card.tradeReceivedAt || card.tradeId)) trader++;
-    });
-    return {power, cards:cards.length, shiny, legendary, trader};
-  }
-  function publish(){
-    const profile = getPlayerProfile();
-    if(FAKE_NAMES.has(String(profile.name || "").toUpperCase())) return Promise.resolve();
-    if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve();
-    return tradeDb.ref("players/" + getId()).update({
-      name:String(profile.name || "Player").slice(0,32),
-      icon:profile.icon || defaultIcon(),
-      stats:stats(),
-      updatedAt:new Date().toISOString()
-    }).catch(e=>console.log("player publish failed", e));
-  }
-  function label(tab){ return ({power:"Total Power",cards:"Cards",shiny:"Shiny Cards",legendary:"Legendary Cards",trader:"Trades"})[tab] || "Score"; }
-  function val(row, tab){ return Number(row && row.stats && row.stats[tab] || 0); }
-  function render(tab, rows){
-    const content = document.getElementById("leaderboardContent");
-    if(!content) return;
-    const clean = (rows || [])
-      .filter(r => r && !FAKE_NAMES.has(String(r.name || "").toUpperCase()))
-      .map(r => ({name:r.name || "Player", icon:r.icon || defaultIcon(), value:val(r,tab), updatedAt:r.updatedAt || ""}))
-      .filter(r => tab === "cards" ? r.value >= 0 : r.value > 0)
-      .sort((a,b)=>b.value-a.value)
-      .slice(0,10);
-    if(!clean.length){
-      content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">No real player stats yet</div><div class="leaderMeta">Open this updated file on each device, save a player name, then make or save a card. Fake names have been removed.</div></div></div>`;
-      return;
-    }
-    content.innerHTML = clean.map((e,i)=>{
-      const cls = i===0 ? "goldLeader" : i===1 ? "silverLeader" : i===2 ? "bronzeLeader" : "";
-      return `<div class="leaderEntry ${cls}">
-        <div class="leaderRank">#${i+1}</div>
-        <img src="${e.icon}" alt="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid white;margin-right:8px;">
-        <div class="leaderMain"><div class="leaderName">${esc(e.name)}</div><div class="leaderMeta">${e.updatedAt ? "Updated " + esc(new Date(e.updatedAt).toLocaleString()) : "Real player"}</div></div>
-        <div class="leaderScore"><div class="leaderScoreValue">${e.value.toLocaleString()}</div><div class="leaderScoreLabel">${label(tab)}</div></div>
-      </div>`;
-    }).join("");
-  }
-  window.showLeaderboardTab = function(tab){
-    currentTab = tab || "power";
-    const content = document.getElementById("leaderboardContent");
-    if(content) content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Loading real leaderboard...</div><div class="leaderMeta">Checking Firebase players only.</div></div></div>`;
-    publish().finally(()=>{
-      if(typeof tradeDb === "undefined" || !tradeDb){ render(currentTab, [Object.assign(getPlayerProfile(), {stats:stats(), updatedAt:new Date().toISOString()})]); return; }
-      tradeDb.ref("players").once("value").then(snap=>{
-        const data = snap.val() || {};
-        const rows = Object.keys(data).map(id=>Object.assign({id}, data[id]));
-        // Try to remove old fake records from Firebase too, if rules allow it.
-        rows.forEach(r=>{ if(FAKE_NAMES.has(String(r.name || "").toUpperCase())) tradeDb.ref("players/" + r.id).remove().catch(()=>{}); });
-        render(currentTab, rows);
-      }).catch(()=>render(currentTab, [Object.assign(getPlayerProfile(), {stats:stats(), updatedAt:new Date().toISOString()})]));
-    });
-  };
-  window.openLeaderboard = function(){
-    const overlay = document.getElementById("leaderboardOverlay");
-    if(overlay) overlay.style.display = "block";
-    window.showLeaderboardTab("power");
-  };
-  const oldSave = window.saveCollection;
-  if(typeof oldSave === "function") window.saveCollection = function(){ const r = oldSave.apply(this, arguments); publish(); return r; };
-  const oldRender = window.renderCards;
-  if(typeof oldRender === "function") window.renderCards = function(){ const r = oldRender.apply(this, arguments); clearTimeout(window.__realLeaderboardTimer); window.__realLeaderboardTimer=setTimeout(publish,400); return r; };
-  window.addEventListener("load", publish);
-})();
-</script>
-
-
-<script>
-/* v164 FINAL FIX: cross-device Firebase player leaderboard */
-(function(){
-  const PROFILE_KEY = "drivermon_player_profile_v1";
-  const PLAYER_ID_KEY = "drivermon_player_id_v1";
-  const PLAYER_PATHS = ["players", "leaderboardPlayers"];
-  const FAKE_NAMES = new Set(["TURBO TOM","RANI RIDER","THE CURRY KING","UBERLORD99","LATE NIGHT LEO","MEALMANCER","BIKE BANDIT","MIDNIGHT MUNCH"]);
-  let currentTab = "power";
-  let liveAttached = false;
-
-  function esc(v){return String(v==null?"":v).replace(/[&<>\"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[ch]));}
-  function makeDefaultIcon(){return (typeof defaultPlayerIcon === "function") ? defaultPlayerIcon() : "";}
-  function playerId(){
-    try{
-      let id = localStorage.getItem(PLAYER_ID_KEY);
-      if(!id){id = "player_" + Date.now() + "_" + Math.random().toString(36).slice(2,10); localStorage.setItem(PLAYER_ID_KEY,id);}
-      return id;
-    }catch(e){return "player_" + Math.random().toString(36).slice(2,10);}
-  }
-  function getProfile(){
-    try{
-      const raw = localStorage.getItem(PROFILE_KEY);
-      if(raw){
-        const p = JSON.parse(raw);
-        return {name:(p.name || "Player").trim() || "Player", icon:p.icon || makeDefaultIcon(), updatedAt:p.updatedAt || null};
-      }
-    }catch(e){}
-    return {name:"Player", icon:makeDefaultIcon(), updatedAt:null};
-  }
-  window.getPlayerProfile = getProfile;
-
-  function cardsArray(){
-    if(typeof drivers !== "undefined" && Array.isArray(drivers)) return drivers;
-    try{
-      const raw = localStorage.getItem("drivermon_collection_v1");
-      if(raw){
-        const parsed = JSON.parse(raw);
-        if(Array.isArray(parsed)) return parsed;
-        if(parsed && Array.isArray(parsed.drivers)) return parsed.drivers;
-      }
-    }catch(e){}
-    return [];
-  }
-  function cardScore(card){
-    try{ if(typeof calc === "function") return Number((calc(card)||{}).score || 0); }catch(e){}
-    return Number(card && (card.power || card.score || card.totalPower) || 0);
-  }
-  function stats(){
-    const cards = cardsArray();
-    let power=0, shiny=0, legendary=0, trader=0;
-    cards.forEach(c=>{
-      const score = cardScore(c); power += score;
-      if(c && c.shiny) shiny++;
-      if(score >= 2500 || String(c && (c.rarity || c.rank || c.quality || "")).toLowerCase().includes("legend")) legendary++;
-      if(c && (c.traded || c.tradeReceivedAt || c.tradeId || c.fromTrade)) trader++;
-    });
-    return {power, cards:cards.length, shiny, legendary, trader};
-  }
-  function payload(){
-    const p = getProfile();
-    return {
-      id: playerId(),
-      name: String(p.name || "Player").slice(0,32),
-      icon: p.icon || makeDefaultIcon(),
-      stats: stats(),
-      updatedAt: new Date().toISOString(),
-      source: "drivermon-v164"
-    };
-  }
-  function publishPlayerStats(){
-    if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve(payload());
-    const data = payload();
-    if(FAKE_NAMES.has(String(data.name).toUpperCase())) return Promise.resolve(data);
-    return Promise.all(PLAYER_PATHS.map(path => tradeDb.ref(path + "/" + data.id).update(data).catch(e=>console.log("publish failed", path, e))))
-      .then(()=>data);
-  }
-  window.publishPlayerStats = publishPlayerStats;
-
-  function updateProfileUI(profile){
-    const p = profile || getProfile();
-    const preview = document.getElementById("playerIconPreview");
-    const input = document.getElementById("playerNameInput");
-    const topIcon = document.getElementById("playerTopIcon");
-    const topName = document.getElementById("playerTopName");
-    const status = document.getElementById("playerProfileStatus");
-    if(preview) preview.src = p.icon || makeDefaultIcon();
-    if(input) input.value = p.name || "Player";
-    if(topIcon) topIcon.src = p.icon || makeDefaultIcon();
-    if(topName) topName.textContent = p.name || "Player";
-    if(status) status.textContent = "Playing as " + (p.name || "Player");
-  }
-  window.setPlayerProfileUI = updateProfileUI;
-  window.updatePlayerTopTile = function(){updateProfileUI(getProfile());};
-
-  window.previewPlayerIcon = function(event){
-    const input = event && event.target;
-    const file = input && input.files && input.files[0];
-    if(!file) return;
-    const reader = new FileReader();
-    reader.onload = function(e){
-      const img = new Image();
-      img.onload = function(){
-        const canvas = document.createElement("canvas"), size = 220;
-        canvas.width = size; canvas.height = size;
-        const ctx = canvas.getContext("2d");
-        const scale = Math.max(size / img.width, size / img.height);
-        const w = img.width * scale, h = img.height * scale;
-        ctx.drawImage(img, (size-w)/2, (size-h)/2, w, h);
-        const dataUrl = canvas.toDataURL("image/jpeg", .82);
-        window.pendingPlayerIcon = dataUrl;
-        const preview = document.getElementById("playerIconPreview");
-        if(preview) preview.src = dataUrl;
-        if(input) input.value = "";
-      };
-      img.src = e.target.result;
-    };
-    reader.readAsDataURL(file);
-  };
-
-  window.savePlayerProfile = function(){
-    const nameInput = document.getElementById("playerNameInput");
-    const old = getProfile();
-    const name = ((nameInput && nameInput.value) || old.name || "Player").trim() || "Player";
-    const icon = window.pendingPlayerIcon || (document.getElementById("playerIconPreview") && document.getElementById("playerIconPreview").src) || old.icon || makeDefaultIcon();
-    const profile = {name, icon, updatedAt:new Date().toISOString()};
-    try{localStorage.setItem(PROFILE_KEY, JSON.stringify(profile)); window.pendingPlayerIcon=null;}catch(e){alert("Could not save profile. Try a smaller image."); return;}
-    updateProfileUI(profile);
-    publishPlayerStats().then(()=>{ if(document.getElementById("leaderboardOverlay")?.style.display === "block") showLeaderboardTab(currentTab); });
-    if(typeof closePlayerProfileEditor === "function") closePlayerProfileEditor();
-  };
-
-  function label(tab){return ({power:"Total Power",cards:"Cards",shiny:"Shiny Cards",legendary:"Legendary Cards",trader:"Trades"})[tab] || "Score";}
-  function value(row, tab){return Number(row && row.stats && row.stats[tab] || 0);}
-  function renderRows(rows){
-    const content = document.getElementById("leaderboardContent");
-    if(!content) return;
-    const byId = {};
-    (rows || []).forEach(r=>{ if(r && r.id) byId[r.id] = Object.assign(byId[r.id] || {}, r); });
-    const list = Object.values(byId)
-      .filter(r=>r && !FAKE_NAMES.has(String(r.name || "").toUpperCase()))
-      .map(r=>({name:r.name || "Player", icon:r.icon || makeDefaultIcon(), value:value(r,currentTab), cards:value(r,"cards"), updatedAt:r.updatedAt || ""}))
-      .filter(r=>currentTab === "cards" ? r.cards >= 0 : r.value > 0)
-      .sort((a,b)=>b.value-a.value)
-      .slice(0,10);
-    if(!list.length){
-      const mine = payload();
-      content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">No shared players showing yet</div><div class="leaderMeta">This device is trying to publish as ${esc(mine.name)} with ${mine.stats.cards} cards. Save a player profile on each device, then reopen this leaderboard.</div></div></div>`;
-      return;
-    }
-    content.innerHTML = list.map((e,i)=>{
-      const cls = i===0 ? "goldLeader" : i===1 ? "silverLeader" : i===2 ? "bronzeLeader" : "";
-      return `<div class="leaderEntry ${cls}"><div class="leaderRank">#${i+1}</div><img src="${e.icon}" alt="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid white;margin-right:8px;"><div class="leaderMain"><div class="leaderName">${esc(e.name)}</div><div class="leaderMeta">${e.cards} cards${e.updatedAt ? " • updated " + esc(new Date(e.updatedAt).toLocaleTimeString()) : ""}</div></div><div class="leaderScore"><div class="leaderScoreValue">${e.value.toLocaleString()}</div><div class="leaderScoreLabel">${label(currentTab)}</div></div></div>`;
-    }).join("");
-  }
-  function loadRowsOnce(){
-    if(typeof tradeDb === "undefined" || !tradeDb){ renderRows([payload()]); return; }
-    Promise.all(PLAYER_PATHS.map(path => tradeDb.ref(path).once("value").then(s=>{
-      const data=s.val()||{}; return Object.keys(data).map(id=>Object.assign({id},data[id]));
-    }).catch(()=>[]))).then(groups=>renderRows([].concat.apply([],groups)));
-  }
-  function attachLive(){
-    if(liveAttached || typeof tradeDb === "undefined" || !tradeDb) return;
-    liveAttached = true;
-    PLAYER_PATHS.forEach(path=>tradeDb.ref(path).on("value", loadRowsOnce));
-  }
-  window.showLeaderboardTab = function(tab){
-    currentTab = tab || "power";
-    const content = document.getElementById("leaderboardContent");
-    if(content) content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Publishing this device...</div><div class="leaderMeta">Then loading shared Firebase players.</div></div></div>`;
-    publishPlayerStats().then(()=>{ attachLive(); loadRowsOnce(); });
-  };
-  window.openLeaderboard = function(){
-    const overlay = document.getElementById("leaderboardOverlay");
-    if(overlay) overlay.style.display = "block";
-    window.showLeaderboardTab(currentTab || "power");
-  };
-
-  const oldSaveCollection = window.saveCollection;
-  if(typeof oldSaveCollection === "function") window.saveCollection = function(){ const r = oldSaveCollection.apply(this, arguments); setTimeout(publishPlayerStats, 50); return r; };
-  const oldRenderCards = window.renderCards;
-  if(typeof oldRenderCards === "function") window.renderCards = function(){ const r = oldRenderCards.apply(this, arguments); clearTimeout(window.__dmLeaderboardTimer); window.__dmLeaderboardTimer = setTimeout(publishPlayerStats, 600); return r; };
-  window.addEventListener("load", function(){
-    updateProfileUI(getProfile());
-    const iconInput = document.getElementById("playerIconInput");
-    if(iconInput) iconInput.addEventListener("click", function(){this.value="";});
-    setTimeout(publishPlayerStats, 800);
-  });
-})();
-</script>
 </body>
 </html>
 
@@ -6759,446 +6489,133 @@ img[alt="DriverDex"]{
 </style>
 
 <script>
-/* v162 real Firebase leaderboard + replaceable player profile image */
+/* v166 FINAL FIREBASE RULES WORKAROUND
+   Uses the already-working trades path for shared leaderboard player records.
+   This avoids permission_denied on /publicLeaderboardPlayers or /players. */
 (function(){
-  const PROFILE_KEY = "drivermon_player_profile_v1";
-  const PLAYER_ID_KEY = "drivermon_player_id_v1";
-  let currentLeaderboardTab = "power";
-  let leaderboardRowsCache = [];
+  const LB_PATH = "trades/__leaderboardPlayers";
+  const PROFILE_KEY = "drivermonPlayerProfile";
 
-  function safeText(value){
-    return String(value == null ? "" : value)
-      .replace(/&/g,"&amp;")
-      .replace(/</g,"&lt;")
-      .replace(/>/g,"&gt;")
-      .replace(/"/g,"&quot;")
-      .replace(/'/g,"&#039;");
+  function esc(v){
+    return String(v ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
   }
-
-  function getPlayerId(){
-    try{
-      let id = localStorage.getItem(PLAYER_ID_KEY);
-      if(!id){
-        id = "player_" + Date.now() + "_" + Math.random().toString(36).slice(2,10);
-        localStorage.setItem(PLAYER_ID_KEY, id);
-      }
-      return id;
-    }catch(err){
-      return "player_" + Math.random().toString(36).slice(2,10);
-    }
-  }
-
-  function smallDefaultIcon(){
-    if(typeof defaultPlayerIcon === "function") return defaultPlayerIcon();
+  function defaultIcon(){
+    try{ if(typeof defaultPlayerIcon === "function") return defaultPlayerIcon(); }catch(e){}
     return "";
   }
-
-  window.getPlayerProfile = function(){
-    try{
-      const raw = localStorage.getItem(PROFILE_KEY);
-      if(raw){
-        const p = JSON.parse(raw);
-        return {name:p.name || "Player", icon:p.icon || smallDefaultIcon(), updatedAt:p.updatedAt || null};
-      }
-    }catch(err){ console.log(err); }
-    return {name:"Player", icon:smallDefaultIcon()};
-  };
-
-  function collectionStats(){
-    const cards = (typeof drivers !== "undefined" && Array.isArray(drivers)) ? drivers : [];
-    let power = 0;
-    let shiny = 0;
-    let legendary = 0;
-    let traded = 0;
-
-    cards.forEach(card=>{
-      try{
-        if(typeof calc === "function"){
-          const c = calc(card);
-          power += Number(c.score || 0);
-          if(Number(c.score || 0) >= 2500) legendary += 1;
-        }else{
-          power += Number(card.power || card.score || 0);
-        }
-      }catch(err){}
-      if(card && card.shiny) shiny += 1;
-      if(card && (card.traded || card.tradeReceivedAt)) traded += 1;
-      if(card && String(card.rarity || card.rank || "").toLowerCase().includes("legend")) legendary += 1;
-    });
-
-    return {power, cards:cards.length, shiny, legendary, trader:traded};
-  }
-
-  function publishPlayerStats(){
-    if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve();
-    const profile = getPlayerProfile();
-    const stats = collectionStats();
-    const payload = {
-      name: (profile.name || "Player").slice(0,32),
-      icon: profile.icon || smallDefaultIcon(),
-      stats,
-      updatedAt: new Date().toISOString()
-    };
-    return tradeDb.ref("players/" + getPlayerId()).update(payload).catch(err=>console.log("Leaderboard publish failed", err));
-  }
-
-  function metricLabel(tab){
-    return ({power:"Total Power",cards:"Cards",shiny:"Shiny Cards",legendary:"Legendary Cards",trader:"Trades"})[tab] || "Score";
-  }
-
-  function valueFor(row, tab){
-    return Number(row && row.stats && row.stats[tab] ? row.stats[tab] : 0);
-  }
-
-  function renderRealLeaderboard(tab, rows){
-    const content = document.getElementById("leaderboardContent");
-    if(!content) return;
-    const list = (rows || [])
-      .map(row=>({
-        name: row.name || "Player",
-        icon: row.icon || smallDefaultIcon(),
-        value: valueFor(row, tab),
-        meta: row.updatedAt ? "Updated " + new Date(row.updatedAt).toLocaleDateString() : "Player stats"
-      }))
-      .filter(entry=>entry.value > 0 || tab === "cards")
-      .sort((a,b)=>b.value-a.value)
-      .slice(0,10);
-
-    if(!list.length){
-      content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">No real players yet</div><div class="leaderMeta">Save a player profile or create cards on another device, then reopen the leaderboard.</div></div></div>`;
-      return;
+  function getDeviceId(){
+    let id = localStorage.getItem("drivermonDevicePlayerId");
+    if(!id){
+      id = "player_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2,8);
+      localStorage.setItem("drivermonDevicePlayerId", id);
     }
-
-    content.innerHTML = list.map((entry,index)=>{
-      const cls = index === 0 ? "goldLeader" : index === 1 ? "silverLeader" : index === 2 ? "bronzeLeader" : "";
-      return `<div class="leaderEntry ${cls}">
-        <div class="leaderRank">#${index + 1}</div>
-        <img src="${entry.icon}" alt="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid white;margin-right:8px;">
-        <div class="leaderMain">
-          <div class="leaderName">${safeText(entry.name)}</div>
-          <div class="leaderMeta">${safeText(entry.meta)}</div>
-        </div>
-        <div class="leaderScore">
-          <div class="leaderScoreValue">${entry.value.toLocaleString()}</div>
-          <div class="leaderScoreLabel">${metricLabel(tab)}</div>
-        </div>
-      </div>`;
-    }).join("");
-  }
-
-  window.showLeaderboardTab = function(tab){
-    currentLeaderboardTab = tab || "power";
-    const content = document.getElementById("leaderboardContent");
-    if(content) content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Loading real leaderboard...</div><div class="leaderMeta">Pulling player stats from Firebase.</div></div></div>`;
-
-    publishPlayerStats().finally(()=>{
-      if(typeof tradeDb === "undefined" || !tradeDb){
-        renderRealLeaderboard(currentLeaderboardTab, [Object.assign(getPlayerProfile(), {stats:collectionStats(), updatedAt:new Date().toISOString()})]);
-        return;
-      }
-      tradeDb.ref("players").once("value").then(snapshot=>{
-        const data = snapshot.val() || {};
-        leaderboardRowsCache = Object.keys(data).map(id=>Object.assign({id}, data[id]));
-        renderRealLeaderboard(currentLeaderboardTab, leaderboardRowsCache);
-      }).catch(err=>{
-        console.log("Leaderboard load failed", err);
-        renderRealLeaderboard(currentLeaderboardTab, [Object.assign(getPlayerProfile(), {stats:collectionStats(), updatedAt:new Date().toISOString()})]);
-      });
-    });
-  };
-
-  window.openLeaderboard = function(){
-    const overlay = document.getElementById("leaderboardOverlay");
-    if(overlay) overlay.style.display = "block";
-    showLeaderboardTab("power");
-  };
-
-  function updateProfileEverywhere(profile){
-    const p = profile || getPlayerProfile();
-    const preview = document.getElementById("playerIconPreview");
-    const input = document.getElementById("playerNameInput");
-    const topIcon = document.getElementById("playerTopIcon");
-    const topName = document.getElementById("playerTopName");
-    if(preview) preview.src = p.icon || smallDefaultIcon();
-    if(input) input.value = p.name || "Player";
-    if(topIcon) topIcon.src = p.icon || smallDefaultIcon();
-    if(topName) topName.textContent = p.name || "Player";
-  }
-
-  window.setPlayerProfileUI = function(profile){ updateProfileEverywhere(profile); };
-  window.updatePlayerTopTile = function(){ updateProfileEverywhere(getPlayerProfile()); };
-
-  window.previewPlayerIcon = function(event){
-    const input = event && event.target;
-    const file = input && input.files && input.files[0];
-    if(!file) return;
-
-    const reader = new FileReader();
-    reader.onload = function(e){
-      const img = new Image();
-      img.onload = function(){
-        const canvas = document.createElement("canvas");
-        const size = 220;
-        canvas.width = size;
-        canvas.height = size;
-        const ctx = canvas.getContext("2d");
-        const scale = Math.max(size / img.width, size / img.height);
-        const w = img.width * scale;
-        const h = img.height * scale;
-        ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
-        window.pendingPlayerIcon = dataUrl;
-        const preview = document.getElementById("playerIconPreview");
-        if(preview) preview.src = dataUrl;
-        if(input) input.value = "";
-      };
-      img.src = e.target.result;
-    };
-    reader.readAsDataURL(file);
-  };
-
-  window.savePlayerProfile = function(){
-    const nameInput = document.getElementById("playerNameInput");
-    const status = document.getElementById("playerProfileStatus");
-    const oldProfile = getPlayerProfile();
-    const name = (nameInput && nameInput.value ? nameInput.value : oldProfile.name || "Player").trim() || "Player";
-    const icon = window.pendingPlayerIcon || (document.getElementById("playerIconPreview")?.src) || oldProfile.icon || smallDefaultIcon();
-    const profile = {name, icon, updatedAt:new Date().toISOString()};
-
-    try{
-      localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
-      window.pendingPlayerIcon = null;
-      updateProfileEverywhere(profile);
-      if(status) status.textContent = `Saved: ${name}`;
-      publishPlayerStats().then(()=>{
-        if(currentLeaderboardTab) showLeaderboardTab(currentLeaderboardTab);
-      });
-      if(typeof closePlayerProfileEditor === "function") closePlayerProfileEditor();
-    }catch(err){
-      console.log("Profile save failed", err);
-      if(status) status.textContent = "Could not save profile image. Try a smaller picture.";
-    }
-  };
-
-  const oldSaveCollectionV162 = window.saveCollection;
-  if(typeof oldSaveCollectionV162 === "function"){
-    window.saveCollection = function(){
-      const result = oldSaveCollectionV162.apply(this, arguments);
-      publishPlayerStats();
-      return result;
-    };
-  }
-
-  const oldRenderCardsV162 = window.renderCards;
-  if(typeof oldRenderCardsV162 === "function"){
-    window.renderCards = function(){
-      const result = oldRenderCardsV162.apply(this, arguments);
-      clearTimeout(window.__leaderboardPublishTimer);
-      window.__leaderboardPublishTimer = setTimeout(publishPlayerStats, 500);
-      return result;
-    };
-  }
-
-  window.addEventListener("load", function(){
-    updateProfileEverywhere(getPlayerProfile());
-    publishPlayerStats();
-    const iconInput = document.getElementById("playerIconInput");
-    if(iconInput){
-      iconInput.addEventListener("click", function(){ this.value = ""; });
-    }
-  });
-})();
-</script>
-
-<script>
-/* v165 TRUE FINAL: shared cross-device Firebase leaderboard. This runs last and overrides old leaderboard patches. */
-(function(){
-  const PROFILE_KEY = "drivermon_player_profile_v1";
-  const PLAYER_ID_KEY = "drivermon_player_id_v1";
-  const SHARED_PATH = "publicLeaderboardPlayers";
-  const FALLBACK_PATHS = ["publicLeaderboardPlayers", "leaderboardPlayers", "players"];
-  let activeTab = "power";
-  let lastRows = [];
-  let listenerStarted = false;
-
-  function esc(v){return String(v==null?"":v).replace(/[&<>\"']/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[ch]));}
-  function iconDefault(){try{return typeof defaultPlayerIcon === "function" ? defaultPlayerIcon() : "";}catch(e){return "";}}
-  function playerId(){
-    try{
-      let id = localStorage.getItem(PLAYER_ID_KEY);
-      if(!id){ id = "dm_" + Date.now() + "_" + Math.random().toString(36).slice(2,10); localStorage.setItem(PLAYER_ID_KEY, id); }
-      return id;
-    }catch(e){ return "dm_" + Math.random().toString(36).slice(2,10); }
+    return id.replace(/[^a-zA-Z0-9_-]/g,"_");
   }
   function getProfile(){
     try{
       const raw = localStorage.getItem(PROFILE_KEY);
       if(raw){
         const p = JSON.parse(raw);
-        return {name: String(p.name || "Player").trim() || "Player", icon: p.icon || iconDefault(), updatedAt:p.updatedAt || null};
+        return { name:p.name || "Player", icon:p.icon || defaultIcon() };
       }
     }catch(e){}
-    return {name:"Player", icon:iconDefault(), updatedAt:null};
+    try{ if(typeof getPlayerProfile === "function") return getPlayerProfile(); }catch(e){}
+    return { name:"Player", icon:defaultIcon() };
   }
-  window.getPlayerProfile = getProfile;
-
-  function getCards(){
-    if(typeof drivers !== "undefined" && Array.isArray(drivers)) return drivers;
-    const possibleKeys = ["drivermon_drivers_v1", "drivermon_collection_v1", "drivers", "driverMonCards"];
-    for(const key of possibleKeys){
+  function getStats(){
+    const cards = (typeof drivers !== "undefined" && Array.isArray(drivers)) ? drivers : [];
+    let power = 0, shiny = 0, legendary = 0, trader = 0;
+    cards.forEach(card=>{
       try{
-        const raw = localStorage.getItem(key);
-        if(!raw) continue;
-        const parsed = JSON.parse(raw);
-        if(Array.isArray(parsed)) return parsed;
-        if(parsed && Array.isArray(parsed.drivers)) return parsed.drivers;
-        if(parsed && Array.isArray(parsed.cards)) return parsed.cards;
+        if(typeof calc === "function"){
+          const c = calc(card);
+          power += Number(c.score || 0);
+          if(Number(c.score || 0) >= 2500) legendary++;
+        }else{
+          power += Number(card.power || card.score || 0);
+        }
       }catch(e){}
-    }
-    return [];
-  }
-  function score(card){
-    try{ if(typeof calc === "function") return Number((calc(card)||{}).score || 0); }catch(e){}
-    return Number(card && (card.score || card.power || card.totalPower || 0));
-  }
-  function stats(){
-    const cards = getCards();
-    let power=0, shiny=0, legendary=0, trader=0;
-    cards.forEach(c=>{
-      const s = score(c); power += s;
-      if(c && c.shiny) shiny++;
-      if(s >= 2500 || String(c && (c.rarity || c.rank || c.quality || "")).toLowerCase().includes("legend")) legendary++;
-      if(c && (c.traded || c.tradeReceivedAt || c.tradeId || c.fromTrade)) trader++;
+      if(card && card.shiny) shiny++;
+      if(card && (card.traded || card.tradeReceivedAt)) trader++;
+      if(card && String(card.rarity || card.rank || "").toLowerCase().includes("legend")) legendary++;
     });
-    return {power, cards:cards.length, shiny, legendary, trader};
+    return { power, cards:cards.length, shiny, legendary, trader };
   }
-  function buildPayload(){
+  function label(tab){
+    return ({power:"Total Power",cards:"Cards",shiny:"Shiny Cards",legendary:"Legendary Cards",trader:"Trades"})[tab] || "Score";
+  }
+  function value(row, tab){
+    return Number(row && row.stats && row.stats[tab] || 0);
+  }
+  function myRow(){
     const p = getProfile();
-    return {
-      id: playerId(),
-      name: String(p.name || "Player").slice(0,32),
-      icon: p.icon || iconDefault(),
-      stats: stats(),
-      updatedAt: new Date().toISOString(),
-      version: "v165"
-    };
+    return { id:getDeviceId(), name:(p.name || "Player").slice(0,32), icon:p.icon || defaultIcon(), stats:getStats(), updatedAt:new Date().toISOString() };
   }
-  function publishPlayerStats(){
-    const data = buildPayload();
-    if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve(data);
-    // Write to the new shared path AND the older paths so older phone/laptop tabs can still see it.
-    const paths = Array.from(new Set([SHARED_PATH, "leaderboardPlayers", "players"]));
-    return Promise.all(paths.map(path => tradeDb.ref(path + "/" + data.id).set(data).catch(err=>({path, err})))).then(()=>data);
-  }
-  window.publishPlayerStats = publishPlayerStats;
-
-  function metric(tab){return ({power:"Total Power",cards:"Cards",shiny:"Shiny Cards",legendary:"Legendary Cards",trader:"Trades"})[tab] || "Score";}
-  function value(row, tab){return Number(row && row.stats && row.stats[tab] || 0);}
-  function combineRows(results){
-    const byId = {};
-    results.forEach(obj=>{
-      Object.keys(obj || {}).forEach(id=>{
-        const row = Object.assign({id}, obj[id]);
-        if(!row || !row.name) return;
-        byId[id] = Object.assign(byId[id] || {}, row);
-      });
+  window.publishPlayerStats = function(){
+    if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve(myRow());
+    const data = myRow();
+    return tradeDb.ref(LB_PATH + "/" + data.id).set(data).then(()=>data).catch(err=>{
+      console.log("Shared leaderboard write failed", err);
+      return data;
     });
-    return Object.values(byId);
-  }
-  function render(tab, rows, note){
-    activeTab = tab || activeTab || "power";
+  };
+  function render(tab, rows){
     const content = document.getElementById("leaderboardContent");
     if(!content) return;
-    const list = (rows || []).map(r=>({
-      id:r.id,
-      name:r.name || "Player",
-      icon:r.icon || iconDefault(),
-      value:value(r, activeTab),
-      cards:value(r,"cards"),
-      updatedAt:r.updatedAt || ""
-    })).filter(r=> activeTab === "cards" ? r.cards >= 0 : r.value > 0)
+    const list = (rows || [])
+      .filter(r => r && r.name && !["ALEX","SAM","TAYLOR","JORDAN","MORGAN","CASEY","RILEY","DRIVERBOT"].includes(String(r.name).toUpperCase()))
+      .map(r => ({name:r.name || "Player", icon:r.icon || defaultIcon(), value:value(r, tab), meta:r.updatedAt ? "Updated " + new Date(r.updatedAt).toLocaleDateString() : "Player stats"}))
+      .filter(r => r.value > 0 || tab === "cards")
       .sort((a,b)=>b.value-a.value)
-      .slice(0,20);
+      .slice(0,10);
     if(!list.length){
-      const mine = buildPayload();
-      content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">No other players loaded yet</div><div class="leaderMeta">This device published as ${esc(mine.name)}. ${note ? esc(note) : "Open this SAME uploaded index.html on the other device and save its profile once."}</div></div><div class="leaderScore"><div class="leaderScoreValue">${mine.stats.cards}</div><div class="leaderScoreLabel">Your Cards</div></div></div>`;
+      content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">No shared players yet</div><div class="leaderMeta">Save a profile and create at least one card on each device, then refresh.</div></div></div>`;
       return;
     }
-    content.innerHTML = list.map((e,i)=>{
-      const cls = i===0 ? "goldLeader" : i===1 ? "silverLeader" : i===2 ? "bronzeLeader" : "";
-      return `<div class="leaderEntry ${cls}"><div class="leaderRank">#${i+1}</div><img src="${e.icon}" alt="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid white;margin-right:8px;"><div class="leaderMain"><div class="leaderName">${esc(e.name)}</div><div class="leaderMeta">${e.id===playerId()?"This device":"Shared player"}${e.updatedAt ? " · " + esc(new Date(e.updatedAt).toLocaleString()) : ""}</div></div><div class="leaderScore"><div class="leaderScoreValue">${e.value.toLocaleString()}</div><div class="leaderScoreLabel">${metric(activeTab)}</div></div></div>`;
-    }).join("");
+    content.innerHTML = list.map((r,i)=>`<div class="leaderEntry ${i===0?'goldLeader':i===1?'silverLeader':i===2?'bronzeLeader':''}">
+      <div class="leaderRank">#${i+1}</div>
+      <img src="${r.icon}" alt="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid white;margin-right:8px;">
+      <div class="leaderMain"><div class="leaderName">${esc(r.name)}</div><div class="leaderMeta">${esc(r.meta)}</div></div>
+      <div class="leaderScore"><div class="leaderScoreValue">${Number(r.value).toLocaleString()}</div><div class="leaderScoreLabel">${label(tab)}</div></div>
+    </div>`).join("");
   }
-  function loadSharedRows(){
-    if(typeof tradeDb === "undefined" || !tradeDb){
-      lastRows = [buildPayload()]; render(activeTab, lastRows, "Firebase did not load."); return Promise.resolve(lastRows);
-    }
-    return Promise.all(FALLBACK_PATHS.map(path => tradeDb.ref(path).once("value").then(s=>s.val() || {}).catch(err=>({__error:String(err && err.message || err)}))))
-      .then(results=>{
-        const errors = results.filter(r=>r && r.__error).map(r=>r.__error);
-        lastRows = combineRows(results.filter(r=>!r.__error));
-        // Always include this device immediately, even before Firebase roundtrip catches up.
-        const mine = buildPayload();
-        const i = lastRows.findIndex(r=>r.id===mine.id);
-        if(i>=0) lastRows[i]=mine; else lastRows.push(mine);
-        render(activeTab, lastRows, errors.length ? "Firebase read issue: " + errors[0] : "");
-        return lastRows;
-      });
-  }
-  function startLiveListener(){
-    if(listenerStarted || typeof tradeDb === "undefined" || !tradeDb) return;
-    listenerStarted = true;
-    tradeDb.ref(SHARED_PATH).on("value", snap=>{
-      const rows = combineRows([snap.val() || {}]);
-      if(rows.length){ lastRows = rows; render(activeTab, lastRows); }
-    }, err=>{ console.log("leaderboard live read failed", err); });
-  }
-
   window.showLeaderboardTab = function(tab){
-    activeTab = tab || "power";
+    window.currentLeaderboardTab = tab || window.currentLeaderboardTab || "power";
     const content = document.getElementById("leaderboardContent");
-    if(content) content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Syncing leaderboard...</div><div class="leaderMeta">Publishing this device and loading all shared players.</div></div></div>`;
-    return publishPlayerStats().then(()=>loadSharedRows()).then(()=>startLiveListener());
+    if(content) content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Loading shared leaderboard...</div><div class="leaderMeta">Using Firebase trading path.</div></div></div>`;
+    publishPlayerStats().finally(()=>{
+      if(typeof tradeDb === "undefined" || !tradeDb){ render(window.currentLeaderboardTab, [myRow()]); return; }
+      tradeDb.ref(LB_PATH).once("value").then(snap=>{
+        const data = snap.val() || {};
+        const rows = Object.keys(data).map(k => Object.assign({id:k}, data[k]));
+        render(window.currentLeaderboardTab, rows);
+      }).catch(err=>{
+        console.log("Shared leaderboard read failed", err);
+        if(content) content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Firebase permission issue</div><div class="leaderMeta">The site can trade, but Firebase rules are blocking leaderboard reads. Ask ChatGPT for the rules paste.</div></div></div>`;
+      });
+    });
   };
   window.openLeaderboard = function(){
     const overlay = document.getElementById("leaderboardOverlay");
     if(overlay) overlay.style.display = "block";
-    window.showLeaderboardTab("power");
+    showLeaderboardTab("power");
   };
-
-  function updateProfileUI(p){
-    p = p || getProfile();
-    const preview=document.getElementById("playerIconPreview"), input=document.getElementById("playerNameInput"), topIcon=document.getElementById("playerTopIcon"), topName=document.getElementById("playerTopName");
-    if(preview) preview.src = p.icon || iconDefault();
-    if(input) input.value = p.name || "Player";
-    if(topIcon) topIcon.src = p.icon || iconDefault();
-    if(topName) topName.textContent = p.name || "Player";
+  const oldSave = window.savePlayerProfile;
+  if(typeof oldSave === "function"){
+    window.savePlayerProfile = function(){
+      const out = oldSave.apply(this, arguments);
+      setTimeout(()=>publishPlayerStats().then(()=>showLeaderboardTab(window.currentLeaderboardTab || "power")), 350);
+      return out;
+    };
   }
-  window.setPlayerProfileUI = updateProfileUI;
-  window.updatePlayerTopTile = function(){updateProfileUI(getProfile());};
-
-  // Keep the now-working image upload behaviour, but make sure saving publishes to Firebase.
-  const previousPreview = window.previewPlayerIcon;
-  window.previewPlayerIcon = function(event){
-    if(typeof previousPreview === "function") return previousPreview(event);
-  };
-  window.savePlayerProfile = function(){
-    const nameInput=document.getElementById("playerNameInput"), status=document.getElementById("playerProfileStatus");
-    const old=getProfile();
-    const name=(nameInput && nameInput.value ? nameInput.value : old.name || "Player").trim() || "Player";
-    const icon=window.pendingPlayerIcon || document.getElementById("playerIconPreview")?.src || old.icon || iconDefault();
-    const p={name, icon, updatedAt:new Date().toISOString()};
-    try{ localStorage.setItem(PROFILE_KEY, JSON.stringify(p)); window.pendingPlayerIcon=null; updateProfileUI(p); if(status) status.textContent="Saved and published: " + name; }
-    catch(e){ if(status) status.textContent="Could not save profile."; }
-    publishPlayerStats().then(()=>loadSharedRows());
-    if(typeof closePlayerProfileEditor === "function") closePlayerProfileEditor();
-  };
-
-  const oldSave=window.saveCollection;
-  if(typeof oldSave === "function") window.saveCollection=function(){const r=oldSave.apply(this,arguments); setTimeout(publishPlayerStats,80); return r;};
-  const oldRender=window.renderCards;
-  if(typeof oldRender === "function") window.renderCards=function(){const r=oldRender.apply(this,arguments); clearTimeout(window.__dmV165Pub); window.__dmV165Pub=setTimeout(publishPlayerStats,700); return r;};
-
-  window.addEventListener("load", function(){ updateProfileUI(getProfile()); publishPlayerStats().then(loadSharedRows); });
+  const oldSaveCollection = window.saveCollection;
+  if(typeof oldSaveCollection === "function"){
+    window.saveCollection = function(){
+      const out = oldSaveCollection.apply(this, arguments);
+      setTimeout(publishPlayerStats, 350);
+      return out;
+    };
+  }
+  window.addEventListener("load", function(){ setTimeout(publishPlayerStats, 900); });
 })();
 </script>
