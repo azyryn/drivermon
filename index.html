@@ -6989,130 +6989,6 @@ window.addEventListener("DOMContentLoaded", function(){
 })();
 </script>
 
-
-
-<!-- v181: FINAL FIX - player collection cards use real card data, images, calculated levels and rarity. Runs last. -->
-<script>
-(function(){
-  const LB_PATH = "trades/__leaderboardPlayers";
-  const PLAYER_ID_KEY = "drivermonDevicePlayerId";
-  function esc(v){ return String(v ?? "").replace(/[&<>'\"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'\"':"&quot;"}[c])); }
-  function safe(v){ return String(v || "player").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90) || "player"; }
-  function norm(v){ return String(v || "").toLowerCase().replace(/&/g,"and").replace(/[^a-z0-9]+/g," ").trim(); }
-  function getId(){
-    let id = localStorage.getItem(PLAYER_ID_KEY) || localStorage.getItem("drivermonPlayerId_v178") || localStorage.getItem("drivermonPlayerId_v177") || localStorage.getItem("drivermonPlayerId") || localStorage.getItem("playerId");
-    if(!id) id = "dm_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2,8);
-    id = safe(id);
-    try{ localStorage.setItem(PLAYER_ID_KEY,id); localStorage.setItem("drivermonPlayerId_v178",id); localStorage.setItem("drivermonPlayerId",id); }catch(e){}
-    return id;
-  }
-  function profile(){
-    try{ if(typeof getPlayerProfile === "function"){ const p=getPlayerProfile(); if(p) return p; } }catch(e){}
-    for(const k of ["driverMonPlayerProfile","drivermonPlayerProfile","drivermon_player_profile_v1","playerProfile","drivermonProfile"]){
-      try{ const raw=localStorage.getItem(k); if(raw){ const p=JSON.parse(raw); if(p && typeof p==="object") return p; } }catch(e){}
-    }
-    return {};
-  }
-  function homeRegion(){ const p=profile(); try{ if(typeof window.getHomeRegion === "function") return window.getHomeRegion() || p.homeRegion || p.region || ""; }catch(e){} return p.homeRegion || p.region || localStorage.getItem("drivermon_user_region") || localStorage.getItem("drivermonHomeRegion") || ""; }
-  function nameOf(c){ return String((c && (c.name || c.driverName || c.title)) || "Unnamed Driver").trim(); }
-  function regionOf(c){ return String((c && (c.region || c.homeRegion || c.area || c.location)) || "Unknown region").trim(); }
-  function keyOf(c){ return safe((c && (c.uid || c.key || c.id)) || (nameOf(c)+"_"+regionOf(c))); }
-  function scoreCalc(c){
-    try{ if(typeof calc === "function" && c && (c.deliveries !== undefined || c.satisfaction !== undefined || c.compliments !== undefined)) return calc(c); }catch(e){}
-    const score = Number(c && (c.score || c.power || c.totalPower) || 0);
-    const level = c && c.level ? c.level : (score ? (score>=2500?100:Math.max(1,Math.round(score/25))) : (c && c.nameRank) || "?");
-    return {score, level};
-  }
-  function rarityOf(c, score){
-    try{ if(typeof rarity === "function") return rarity(Number(score||0), c && (c.manualRarity || c.rarity)); }catch(e){}
-    if(c && (c.rarity || c.manualRarity || c.rank)) return c.rarity || c.manualRarity || c.rank;
-    score=Number(score||0); if(score>=2500)return"Final"; if(score>=2200)return"Platinum"; if(score>=1900)return"Diamond"; if(score>=1400)return"Gold"; if(score>=900)return"Silver"; return"Bronze";
-  }
-  function typeOf(c, calcObj){
-    try{ if(typeof driverType === "function"){ const t=driverType(c, calcObj || scoreCalc(c)); if(t) return (t.icon ? t.icon + " " : "") + (t.name || t.type || "Type"); } }catch(e){}
-    return String(c && (c.type || c.element || c.driverType) || "Type");
-  }
-  function imageOf(c){
-    if(!c) return "";
-    for(const k of ["image","faceImage","imageData","photo","src","avatar","face"]){ const x=c[k]; if(typeof x === "string" && x.indexOf("data:image")===0) return x; }
-    const idx = c.img ?? c.imageIndex ?? c.faceIndex;
-    try{ if(typeof faceImages !== "undefined" && idx !== undefined && faceImages[idx]) return faceImages[idx]; }catch(e){}
-    try{ if(typeof fullImages !== "undefined" && idx !== undefined && fullImages[idx]) return fullImages[idx]; }catch(e){}
-    return "";
-  }
-  function allLocalCards(){ try{ if(typeof drivers !== "undefined" && Array.isArray(drivers)) return drivers.filter(Boolean); }catch(e){} return []; }
-  function matchLocal(pub){
-    if(!pub) return null;
-    const cards=allLocalCards();
-    const k=String(pub.uid || pub.key || pub.id || "");
-    if(k){ const byId=cards.find(c=>String(c.uid||c.key||c.id||"")===k); if(byId) return byId; }
-    const n=norm(nameOf(pub)), r=norm(regionOf(pub));
-    return cards.find(c=>norm(nameOf(c))===n && (!r || norm(regionOf(c))===r)) || cards.find(c=>norm(nameOf(c))===n) || null;
-  }
-  function enrich(pub){
-    const local=matchLocal(pub) || {};
-    // public values first for ownership/shiny, local values fill missing image/stats
-    const merged=Object.assign({}, local, pub || {});
-    if(!imageOf(merged) && imageOf(local)) merged.image=imageOf(local);
-    if((!merged.deliveries && local.deliveries) || (!merged.satisfaction && local.satisfaction)) Object.assign(merged, {deliveries:local.deliveries, satisfaction:local.satisfaction, compliments:local.compliments, since:local.since, img:local.img, nameRank:local.nameRank});
-    return merged;
-  }
-  function publicCollection(){
-    const out=[];
-    allLocalCards().forEach((d,i)=>{
-      const c=scoreCalc(d); const score=Number(c.score||0); const img=imageOf(d);
-      out.push({
-        uid:String(d.uid || d.id || d.key || "card_"+i), key:keyOf(d), name:nameOf(d), region:regionOf(d), country:d.country || "",
-        img:d.img, image:img, type:typeOf(d,c), deliveries:d.deliveries ?? null, satisfaction:d.satisfaction ?? null, compliments:d.compliments ?? null, since:d.since || "", nameRank:d.nameRank || "",
-        score:score, power:score, level:c.level, rarity:rarityOf(d,score), shiny:!!d.shiny, updatedAt:new Date().toISOString()
-      });
-    });
-    const seen=new Map(); out.forEach(c=>seen.set(keyOf(c),c));
-    return Array.from(seen.values()).sort((a,b)=>Number(b.score||0)-Number(a.score||0)).slice(0,300);
-  }
-  function playerRow(){
-    const p=profile(); const cards=publicCollection();
-    const stats=cards.reduce((a,c)=>{ a.cards++; a.power+=Number(c.score||0); if(c.shiny)a.shiny++; if(String(c.rarity||"").toLowerCase().includes("legend")||String(c.rarity||"")==="Final"||Number(c.score||0)>=2500)a.legendary++; return a; },{cards:0,power:0,shiny:0,legendary:0,trader:0});
-    let icon=p.icon||p.avatar||p.profileImage||""; try{ if(!icon && typeof defaultIconSafe === "function") icon=defaultIconSafe(); }catch(e){}
-    return {id:getId(), name:String(p.username||p.name||p.displayName||"Player").slice(0,32), username:String(p.username||p.name||"Player").slice(0,32), icon, avatar:icon, homeRegion:homeRegion(), region:homeRegion(), stats, publicCollection:cards, updatedAt:new Date().toISOString(), collectionUpdatedAt:new Date().toISOString()};
-  }
-  function publish(){
-    const row=playerRow();
-    if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve(row);
-    return tradeDb.ref(LB_PATH + "/" + safe(row.id)).set(row).then(()=>row).catch(err=>{ console.log("v181 publish failed",err); return row; });
-  }
-  function readRows(){
-    if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve([playerRow()]);
-    return tradeDb.ref(LB_PATH).once("value").then(s=>{ const v=s.val()||{}; const rows=Object.keys(v).map(k=>Object.assign({id:k},v[k])).filter(r=>r && (r.name||r.username)); const mine=playerRow(); if(!rows.some(r=>safe(r.id)===safe(mine.id))) rows.push(mine); return rows; }).catch(err=>{ console.log("v181 read failed",err); return [playerRow()]; });
-  }
-  function metric(r,m){ const s=r.stats||{}; if(m==="cards") return Number(s.cards || (Array.isArray(r.publicCollection)?r.publicCollection.length:0)); if(m==="shiny") return Number(s.shiny||0); if(m==="legendary") return Number(s.legendary||0); if(m==="trader") return Number(s.trader||0); return Number(s.power||s.totalPower||0); }
-  function label(m){ return ({power:"Power",cards:"Cards",shiny:"Shiny",legendary:"Legendary",trader:"Trades"})[m]||"Score"; }
-  function dedupe(rows){ const map=new Map(); rows.forEach(r=>{ const k=norm(r.name||r.username)||safe(r.id); const old=map.get(k); const rc=Array.isArray(r.publicCollection)?r.publicCollection.length:metric(r,"cards"); const oc=old?(Array.isArray(old.publicCollection)?old.publicCollection.length:metric(old,"cards")):-1; const rt=Date.parse(r.collectionUpdatedAt||r.updatedAt||0)||0; const ot=old?(Date.parse(old.collectionUpdatedAt||old.updatedAt||0)||0):-1; if(!old || rc>oc || rt>ot) map.set(k,r); }); return Array.from(map.values()); }
-  function ensureCss(){
-    if(document.getElementById("v181Css")) return;
-    const css=document.createElement("style"); css.id="v181Css"; css.textContent=`
-      .leaderAvatarClickV181{width:54px!important;height:54px!important;border-radius:50%!important;object-fit:cover!important;border:3px solid white!important;margin-right:8px!important;cursor:pointer!important;background:#10234e!important;box-shadow:0 4px 0 rgba(0,0,0,.25)!important;}
-      .v181Header{display:flex;gap:14px;align-items:center;background:rgba(0,20,60,.82);border:2px solid rgba(255,255,255,.18);border-radius:18px;padding:12px;margin-bottom:14px}.v181Header button{background:linear-gradient(180deg,#ffdf38,#ffb000)!important;color:#1c1c1c!important}.v181Title{font-size:26px;font-weight:1000;color:#ffdf38;text-shadow:2px 2px 0 #003b86;line-height:1}.v181Meta{font-weight:900;opacity:.9;margin-top:4px}.v181Grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:12px}
-      .v181MiniCard{position:relative;min-height:178px;border-radius:18px;padding:10px;overflow:hidden;color:white;border:3px solid white;box-shadow:0 7px 0 rgba(0,0,0,.25),0 12px 24px rgba(0,0,0,.28);background:#333;text-align:center}.v181MiniCard:before{content:"";position:absolute;inset:0;border-radius:15px;background:linear-gradient(135deg,rgba(255,255,255,.25),transparent 28%,rgba(255,255,255,.12) 55%,transparent),radial-gradient(circle at top right,rgba(255,255,255,.38),transparent 22%);opacity:.75;pointer-events:none}.v181MiniCard>*{position:relative;z-index:1}
-      .v181MiniCard.Diamond{background:linear-gradient(135deg,#073b66,#0d93d7 55%,#062642);border-color:#62ddff}.v181MiniCard.Platinum{background:linear-gradient(135deg,#3a1663,#ac4cff 60%,#25003c);border-color:#df9cff}.v181MiniCard.Gold{background:linear-gradient(135deg,#684800,#ffc400 55%,#5c3200);border-color:#ffe45c}.v181MiniCard.Silver{background:linear-gradient(135deg,#30343b,#929ba6 55%,#1c1f25);border-color:#dce4eb}.v181MiniCard.Bronze{background:linear-gradient(135deg,#4f2100,#b85f17 55%,#2b1200);border-color:#ff9d3c}.v181MiniCard.Final{background:linear-gradient(135deg,#011d54,#00d4ff 25%,#ffe600 55%,#ff2994);border-color:#fff44a}.v181MiniCard.shiny{background:linear-gradient(135deg,#ffe45c 0%,#ff5fd7 18%,#43dfff 36%,#6eff8c 54%,#fff45e 70%,#ff8f2d 86%,#b35cff 100%)!important;border-color:#fff4a8!important;box-shadow:0 0 0 3px rgba(255,255,255,.75),0 0 22px rgba(255,230,80,.9),0 7px 0 rgba(0,0,0,.25)!important}
-      .v181Top{display:flex;justify-content:space-between;gap:5px;align-items:center;margin-bottom:8px}.v181Type,.v181Level{background:rgba(0,0,0,.34);border:1px solid rgba(255,255,255,.45);border-radius:999px;padding:4px 6px;font-size:10px;font-weight:1000;color:white;line-height:1;white-space:nowrap}.v181Face{width:76px;height:76px;border-radius:50%;border:3px solid white;background:#111;margin:0 auto 8px;display:flex;align-items:center;justify-content:center;overflow:hidden;box-shadow:0 0 0 3px rgba(0,0,0,.28);font-size:34px;font-weight:1000;color:white}.v181Face img{width:100%;height:100%;object-fit:cover;display:block}.v181Name{font-size:13px!important;color:white!important;text-shadow:2px 2px 0 rgba(0,0,0,.45);margin-top:4px;line-height:1;font-weight:1000;text-transform:uppercase}.v181Power{font-size:9px;opacity:.82;font-weight:900;margin-top:4px}
-      @media(max-width:700px){.v181Header{align-items:flex-start;flex-direction:column}.v181Grid{grid-template-columns:repeat(auto-fill,minmax(116px,1fr))}.v181Face{width:66px;height:66px}.v181Type,.v181Level{font-size:9px;padding:3px 5px}.v181Name{font-size:12px!important}}
-    `; document.head.appendChild(css);
-  }
-  function mini(c0){ const c=enrich(c0); const calcObj=scoreCalc(c); const score=Number(c.score || calcObj.score || 0); const level=c.level || calcObj.level || "?"; const r=rarityOf(c,score); const img=imageOf(c); const type=typeOf(c,calcObj); return `<div class="v181MiniCard ${esc(safe(r))} ${c.shiny?"shiny":""}"><div class="v181Top"><span class="v181Type">${esc(type)}</span><span class="v181Level">LVL ${esc(level)}</span></div><div class="v181Face">${img?`<img src="${esc(img)}" alt="${esc(nameOf(c))}">`:"?"}</div><div class="v181Name">${c.shiny?"✨ ":""}${esc(nameOf(c))}</div><div class="v181Power">${score?score.toLocaleString()+" power":""}</div></div>`; }
-  function renderCollection(player){ ensureCss(); const content=document.getElementById("leaderboardContent"); if(!content)return; const cards=(Array.isArray(player.publicCollection)?player.publicCollection:[]).slice().map(enrich); cards.sort((a,b)=>String(regionOf(a)).localeCompare(String(regionOf(b)))||Number((b.score||scoreCalc(b).score)||0)-Number((a.score||scoreCalc(a).score)||0)); const name=esc(player.name||player.username||"Player"); const home=esc(player.homeRegion||player.region||""); content.innerHTML=`<div class="v181Header"><button type="button" id="v181Back">← Back to Leaderboard</button><div><div class="v181Title">${name}'s DriverMon Cards</div><div class="v181Meta">${home?`Home region: ${home} • `:""}${cards.length} public cards from Firebase</div></div></div><div class="v181Grid">${cards.length?cards.map(mini).join(""):`<div class="dexLoading">No public cards found yet. Refresh once after collecting cards.</div>`}</div>`; const b=document.getElementById("v181Back"); if(b)b.onclick=()=>window.showLeaderboardTab(window.currentLeaderboardTab||"power"); }
-  function renderLeaderboard(rows, m){ ensureCss(); const content=document.getElementById("leaderboardContent"); if(!content)return; const fake=["ALEX","SAM","TAYLOR","JORDAN","MORGAN","CASEY","RILEY","DRIVERBOT"]; const list=dedupe(rows).filter(r=>!fake.includes(String(r.name||r.username||"").toUpperCase())).sort((a,b)=>metric(b,m)-metric(a,m)).slice(0,30); content.innerHTML=list.length?list.map((r,i)=>{ const id=esc(safe(r.id)); const nm=esc(r.name||r.username||"Player"); const icon=esc(r.icon||r.avatar||""); const home=esc(r.homeRegion||r.region||""); const cards=Array.isArray(r.publicCollection)?r.publicCollection.length:metric(r,"cards"); return `<div class="leaderEntry ${i===0?'goldLeader':i===1?'silverLeader':i===2?'bronzeLeader':''}"><div class="leaderRank">#${i+1}</div><img class="leaderAvatarClickV181" data-player-id="${id}" src="${icon}" alt="${nm}" title="Tap to view ${nm}'s cards"><div class="leaderMain"><div class="leaderName">${nm}</div><div class="leaderMeta">${home?`Home: ${home} • `:""}${cards} public cards<br><span style="color:#ffdf38;font-weight:1000;">Tap profile picture to view cards</span></div></div><div class="leaderScore"><div class="leaderScoreValue">${Number(metric(r,m)).toLocaleString()}</div><div class="leaderScoreLabel">${esc(label(m))}</div></div></div>`; }).join(""):`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">No shared players yet</div><div class="leaderMeta">Save profile/create a card on each device, then refresh.</div></div></div>`; }
-  function viewPlayer(id){ const content=document.getElementById("leaderboardContent"); if(content) content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Loading real cards...</div><div class="leaderMeta">Reading Firebase collection and matching card data.</div></div></div>`; if(typeof tradeDb==="undefined"||!tradeDb){ renderCollection(playerRow()); return; } tradeDb.ref(LB_PATH+"/"+safe(id)).once("value").then(s=>renderCollection(s.val()?Object.assign({id:safe(id)},s.val()):{name:"Player",publicCollection:[]})).catch(err=>{ if(content)content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Could not load cards</div><div class="leaderMeta">${esc(err&&err.message?err.message:err)}</div></div></div>`; }); }
-  window.publishPublicPlayerCollection=publish; window.publishPlayerStats=publish;
-  window.showLeaderboardTab=function(metricName){ ensureCss(); window.currentLeaderboardTab=metricName||window.currentLeaderboardTab||"power"; const content=document.getElementById("leaderboardContent"); if(content) content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Loading Firebase leaderboard...</div><div class="leaderMeta">Publishing full card data from this device.</div></div></div>`; publish().finally(()=>readRows().then(rows=>renderLeaderboard(rows,window.currentLeaderboardTab||"power"))); };
-  window.openLeaderboard=function(){ ensureCss(); const o=document.getElementById("leaderboardOverlay"); if(o)o.style.display="block"; window.showLeaderboardTab(window.currentLeaderboardTab||"power"); };
-  window.viewPlayerCollection=viewPlayer;
-  document.addEventListener("click",function(e){ const a=e.target&&e.target.closest?e.target.closest(".leaderAvatarClickV181,.leaderAvatarClickV180,.leaderAvatarClickV179,.leaderAvatarClickV178,.leaderAvatarClickV177,.leaderAvatarClickV176,.leaderAvatarClickV175"):null; if(a&&a.dataset&&a.dataset.playerId){ e.preventDefault(); e.stopPropagation(); viewPlayer(a.dataset.playerId); } }, true);
-  const oldSave=window.saveCollection; if(typeof oldSave==="function") window.saveCollection=function(){ const r=oldSave.apply(this,arguments); setTimeout(publish,250); return r; };
-  window.addEventListener("load",()=>{ ensureCss(); setTimeout(publish,900); });
-})();
-</script>
-
 </body>
 </html>
 
@@ -8824,5 +8700,123 @@ img[alt="DriverDex"]{
   document.addEventListener("click", function(e){ const avatar=e.target && e.target.closest ? e.target.closest(".leaderAvatarClickV178,.leaderAvatarClickV177,.leaderAvatarClickV176,.leaderAvatarClickV175") : null; if(avatar && avatar.dataset && avatar.dataset.playerId){ e.preventDefault(); e.stopPropagation(); viewPlayer(avatar.dataset.playerId); } }, true);
   const oldSave=window.saveCollection; if(typeof oldSave === "function") window.saveCollection=function(){ const r=oldSave.apply(this,arguments); setTimeout(publish,250); return r; };
   window.addEventListener("load", function(){ ensureCss(); setTimeout(publish,1200); });
+})();
+</script>
+
+<!-- v182 REAL Firebase player collections: publish full card data and render mini real cards, not placeholders. -->
+<script>
+(function(){
+  const LB_PATH = "trades/__leaderboardPlayers";
+  const PLAYER_ID_KEY = "drivermonPlayerId_v178";
+  const PROFILE_KEYS = ["driverMonPlayerProfile","playerProfile","drivermonProfile","drivermon_player_profile"];
+  function esc(s){ return String(s == null ? "" : s).replace(/[&<>\"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
+  function safe(s){ return String(s || "player").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,80) || "player"; }
+  function norm(s){ return String(s || "").trim().toLowerCase(); }
+  function getProfile(){
+    try{ if(typeof getPlayerProfile === "function"){ const p=getPlayerProfile(); if(p && typeof p === "object") return p; } }catch(e){}
+    for(const k of PROFILE_KEYS){ try{ const raw=localStorage.getItem(k); if(raw){ const p=JSON.parse(raw); if(p && typeof p === "object") return p; } }catch(e){} }
+    return {};
+  }
+  function getName(){ const p=getProfile(); return String(p.username || p.name || p.playerName || p.displayName || "Player").trim() || "Player"; }
+  function getIcon(){
+    const p=getProfile();
+    for(const x of [p.avatar,p.avatarData,p.icon,p.profilePic,p.profileImage,p.image,p.photo]){ if(String(x||"").startsWith("data:image")) return String(x); }
+    try{ if(typeof playerIconData !== "undefined" && String(playerIconData||"").startsWith("data:image")) return playerIconData; }catch(e){}
+    try{ if(typeof defaultIconSafe === "function") return defaultIconSafe(); }catch(e){}
+    return "";
+  }
+  function getHomeRegion(){
+    const p=getProfile(); let r=p.homeRegion || p.region || p.userRegion || "";
+    try{ if(!r && typeof window.getHomeRegion === "function") r=window.getHomeRegion(); }catch(e){}
+    try{ if(!r) r=localStorage.getItem("drivermonHomeRegion") || localStorage.getItem("homeRegion") || localStorage.getItem("playerRegion") || ""; }catch(e){}
+    return String(r||"").trim();
+  }
+  function getId(){
+    let id="";
+    try{ id=localStorage.getItem(PLAYER_ID_KEY) || localStorage.getItem("drivermonPlayerId_v177") || localStorage.getItem("drivermonPlayerId") || localStorage.getItem("playerId") || ""; }catch(e){}
+    if(!id) id="dm_"+Math.random().toString(36).slice(2,10)+"_"+Date.now().toString(36);
+    id=safe(id);
+    try{ localStorage.setItem(PLAYER_ID_KEY,id); localStorage.setItem("drivermonPlayerId",id); localStorage.setItem("drivermonPlayerId_v177",id); }catch(e){}
+    return id;
+  }
+  function localDrivers(){ try{ if(Array.isArray(window.drivers)) return window.drivers.filter(Boolean); }catch(e){} try{ if(typeof drivers !== "undefined" && Array.isArray(drivers)) return drivers.filter(Boolean); }catch(e){} return []; }
+  function localFace(d){
+    try{ if(typeof faceImages !== "undefined" && Array.isArray(faceImages) && d && d.img != null && faceImages[d.img]) return faceImages[d.img]; }catch(e){}
+    try{ if(window.faceImages && Array.isArray(window.faceImages) && d && d.img != null && window.faceImages[d.img]) return window.faceImages[d.img]; }catch(e){}
+    for(const k of ["image","imgData","imgSrc","photo","face","faceImage","imageData","src"]){ if(String(d && d[k] || "").startsWith("data:image")) return String(d[k]); }
+    return "";
+  }
+  function calcCard(d){ try{ if(typeof calc === "function") return calc(d) || {}; }catch(e){} try{ if(typeof calcSafe === "function") return calcSafe(d) || {}; }catch(e){} return {}; }
+  function rarityFor(d,c){ try{ if(typeof rarity === "function") return rarity(Number(c.score||0), d.manualRarity); }catch(e){} return d.manualRarity || d.rarity || d.rank || "Bronze"; }
+  function typeFor(d,c){ try{ if(typeof driverType === "function") return driverType(d,c) || {}; }catch(e){} return {name:d.type || d.element || "Type", icon:d.typeIcon || ""}; }
+  function regionFor(d){ try{ if(typeof latestRegionForDriver === "function"){ const rr=latestRegionForDriver(d); if(rr && rr.region) return rr.region; } }catch(e){} return d.region || d.homeRegion || d.area || d.location || "Unknown"; }
+  function countryFor(d){ return d.country || ""; }
+  function cardName(c){ return String(c && (c.name || c.driverName || c.title) || "Unnamed Driver").trim(); }
+  function hydrateFromLocal(c){
+    const n=norm(cardName(c)); if(!n) return c || {};
+    const match=localDrivers().slice().reverse().find(d=>norm(cardName(d))===n);
+    if(!match) return c || {};
+    const calcObj=calcCard(match); const type=typeFor(match, calcObj);
+    return Object.assign({}, c || {}, {
+      uid: match.uid || (c&&c.uid) || n,
+      name: cardName(match),
+      region: regionFor(match),
+      country: countryFor(match),
+      rarity: rarityFor(match, calcObj),
+      level: calcObj.level || match.level || match.nameRank || (c&&c.level) || "?",
+      score: calcObj.score || match.score || (c&&c.score) || 0,
+      shiny: !!(match.shiny || (c&&c.shiny)),
+      type: type.name || (c&&c.type) || "Type",
+      typeIcon: type.icon || (c&&c.typeIcon) || "",
+      image: localFace(match) || (c&&c.image) || ""
+    });
+  }
+  function publicCards(){
+    return localDrivers().map(d=>{
+      const c=calcCard(d); const t=typeFor(d,c);
+      return {
+        uid: d.uid || (cardName(d)+"_"+Math.random().toString(36).slice(2,6)),
+        name: cardName(d),
+        region: regionFor(d),
+        country: countryFor(d),
+        rarity: rarityFor(d,c),
+        level: c.level || d.level || d.nameRank || "?",
+        score: c.score || d.score || d.power || 0,
+        shiny: !!d.shiny,
+        type: t.name || d.type || "Type",
+        typeIcon: t.icon || "",
+        image: localFace(d)
+      };
+    }).filter(c=>c.name && c.name !== "Unnamed Driver").slice(0,300);
+  }
+  function stats(cards){ return cards.reduce((a,c)=>{ a.cards++; a.power+=Number(c.score||0); if(c.shiny)a.shiny++; if(String(c.rarity||"").toLowerCase().includes("legend") || Number(c.score||0)>=2500)a.legendary++; return a; }, {cards:0,power:0,shiny:0,legendary:0,trader:0}); }
+  function myRow(){ const cards=publicCards(); return {id:getId(), name:getName(), username:getName(), icon:getIcon(), avatar:getIcon(), homeRegion:getHomeRegion(), region:getHomeRegion(), publicCollection:cards, stats:stats(cards), updatedAt:new Date().toISOString(), collectionUpdatedAt:new Date().toISOString(), schemaVersion:182}; }
+  function publish(){ if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve(myRow()); const row=myRow(); return tradeDb.ref(LB_PATH+"/"+safe(row.id)).set(row).then(()=>row).catch(err=>{ console.log("v182 publish failed",err); return row; }); }
+  function readRows(){ if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve([myRow()]); return tradeDb.ref(LB_PATH).once("value").then(snap=>{ const val=snap.val()||{}; const rows=Object.keys(val).map(k=>Object.assign({id:k},val[k])).filter(r=>r&&(r.name||r.username)); if(!rows.some(r=>safe(r.id)===safe(getId()))) rows.push(myRow()); return rows; }).catch(err=>{ console.log("v182 read failed",err); return [myRow()]; }); }
+  function dedupe(rows){ const map=new Map(); rows.forEach(r=>{ const key=norm(r.name||r.username)||safe(r.id); const old=map.get(key); const rc=Array.isArray(r.publicCollection)?r.publicCollection.length:Number(r.stats&&r.stats.cards||0); const oc=old?(Array.isArray(old.publicCollection)?old.publicCollection.length:Number(old.stats&&old.stats.cards||0)):-1; const rt=Date.parse(r.updatedAt||r.collectionUpdatedAt||0)||0, ot=old?(Date.parse(old.updatedAt||old.collectionUpdatedAt||0)||0):-1; if(!old||rc>oc||rt>ot) map.set(key,r); }); return Array.from(map.values()); }
+  function value(r,metric){ const s=r.stats||{}; if(metric==="cards") return Number(s.cards||(Array.isArray(r.publicCollection)?r.publicCollection.length:0)); if(metric==="shiny") return Number(s.shiny||0); if(metric==="legendary") return Number(s.legendary||0); if(metric==="trader") return Number(s.trader||0); return Number(s.power||s.totalPower||0); }
+  function label(metric){ return ({power:"Power",cards:"Cards",shiny:"Shiny",legendary:"Legendary",trader:"Trades"})[metric]||"Score"; }
+  function renderLeaderboard(rows,metric){
+    const content=document.getElementById("leaderboardContent"); if(!content) return;
+    const list=dedupe(rows).sort((a,b)=>value(b,metric)-value(a,metric)).slice(0,30);
+    content.innerHTML=list.length?list.map((r,i)=>{ const cards=Array.isArray(r.publicCollection)?r.publicCollection.length:value(r,"cards"); const id=esc(safe(r.id)); const name=esc(r.name||r.username||"Player"); const icon=esc(r.icon||r.avatar||getIcon()); const home=esc(r.homeRegion||r.region||""); return `<div class="leaderEntry ${i===0?'goldLeader':i===1?'silverLeader':i===2?'bronzeLeader':''}"><div class="leaderRank">#${i+1}</div><img class="leaderAvatarClickV182" data-player-id="${id}" src="${icon}" alt="${name}" title="Tap to view ${name}'s cards" style="width:52px;height:52px;border-radius:50%;object-fit:cover;border:3px solid white;margin-right:8px;cursor:pointer;background:#10234e;"><div class="leaderMain"><div class="leaderName">${name}</div><div class="leaderMeta">${home?`Home: ${home} • `:""}${cards} public cards<br><span style="color:#ffdf38;font-weight:1000;">Tap profile picture to view cards</span></div></div><div class="leaderScore"><div class="leaderScoreValue">${Number(value(r,metric)).toLocaleString()}</div><div class="leaderScoreLabel">${esc(label(metric))}</div></div></div>`; }).join(""):`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">No players yet</div><div class="leaderMeta">No public Firebase players were found.</div></div></div>`;
+  }
+  function cssClassRarity(c){ const r=String(c.rarity||"Bronze").replace(/[^a-zA-Z0-9_-]/g,""); return r || "Bronze"; }
+  function miniCardHtml(raw){
+    const c=hydrateFromLocal(raw||{}); const img=String(c.image||""); const typeLabel=((c.typeIcon?c.typeIcon+" ":"")+String(c.type||"Type")).trim(); const level=String(c.level||"?"); const rClass=cssClassRarity(c); const name=cardName(c);
+    return `<article class="v182MiniCard ${esc(rClass)} ${c.shiny?'shiny':''}"><div class="v182MiniInner"><div class="v182MiniTop"><span class="v182Type">${esc(typeLabel)}</span><span class="v182Level">LVL ${esc(level)}</span></div><div class="v182Face">${img?`<img src="${esc(img)}" alt="${esc(name)}">`:`<span>?</span>`}</div><div class="v182Name">${c.shiny?'✨ ':''}${esc(name)}</div></div></article>`;
+  }
+  function ensureCss(){ if(document.getElementById("v182Css")) return; const st=document.createElement("style"); st.id="v182Css"; st.textContent=`
+    .v178CollectionHeader{display:flex;gap:14px;align-items:center;background:rgba(0,20,60,.82);border:2px solid rgba(255,255,255,.18);border-radius:18px;padding:12px;margin-bottom:14px}.v178CollectionHeader button{background:linear-gradient(180deg,#ffdf38,#ffb000)!important;color:#1c1c1c!important;box-shadow:0 4px 0 rgba(0,0,0,.28)!important}.v178CollectionTitle{font-size:26px;font-weight:1000;color:#ffdf38;text-shadow:2px 2px 0 #003b86;line-height:1}.v178CollectionMeta{font-weight:900;opacity:.9;margin-top:4px}
+    .v178PlayerGrid{display:grid!important;grid-template-columns:repeat(auto-fill,minmax(170px,1fr))!important;gap:14px!important}.v182MiniCard{position:relative;min-height:235px;border-radius:22px;padding:9px;overflow:hidden;color:white;border:4px solid white;box-shadow:0 10px 0 rgba(0,0,0,.28),0 14px 25px rgba(0,0,0,.26);background:linear-gradient(135deg,#30343b,#929ba6 55%,#1c1f25)}.v182MiniCard:before{content:"";position:absolute;inset:0;background:linear-gradient(135deg,rgba(255,255,255,.28),transparent 24%,rgba(255,255,255,.12) 45%,transparent),radial-gradient(circle at top right,rgba(255,255,255,.42),transparent 20%);opacity:.78}.v182MiniCard:after{content:"";position:absolute;inset:8px;border:1px solid rgba(255,255,255,.25);border-radius:17px;pointer-events:none}.v182MiniInner{position:relative;z-index:1}.v182MiniTop{display:flex;justify-content:space-between;gap:7px;align-items:center;margin-bottom:12px}.v182Type,.v182Level{background:rgba(0,0,0,.34);border:2px solid rgba(255,255,255,.5);border-radius:999px;padding:6px 8px;font-size:12px;font-weight:1000;color:white;line-height:1;white-space:nowrap}.v182Face{width:100px;height:100px;margin:0 auto 11px;border-radius:50%;border:4px solid rgba(255,255,255,.96);box-shadow:0 0 0 5px rgba(0,0,0,.35);overflow:hidden;background:#111;display:flex;align-items:center;justify-content:center}.v182Face img{width:100%;height:100%;object-fit:cover;display:block}.v182Face span{font-size:48px;font-weight:1000}.v182Name{text-align:center;font-size:20px;line-height:1;font-weight:1000;text-transform:uppercase;text-shadow:2px 2px 0 rgba(0,0,0,.45);color:white}.v182MiniCard.Diamond{background:linear-gradient(135deg,#073b66,#0d93d7 55%,#062642);border-color:#62ddff}.v182MiniCard.Platinum{background:linear-gradient(135deg,#3a1663,#ac4cff 60%,#25003c);border-color:#df9cff}.v182MiniCard.Gold{background:linear-gradient(135deg,#684800,#ffc400 55%,#5c3200);border-color:#ffe45c}.v182MiniCard.Silver{background:linear-gradient(135deg,#30343b,#929ba6 55%,#1c1f25);border-color:#dce4eb}.v182MiniCard.Bronze{background:linear-gradient(135deg,#4f2100,#b85f17 55%,#2b1200);border-color:#ff9d3c}.v182MiniCard.Final{background:linear-gradient(135deg,#011d54,#00d4ff 25%,#ffe600 55%,#ff2994);border-color:#fff44a}.v182MiniCard.shiny{background:linear-gradient(135deg,#ffe45c 0%,#ff5fd7 18%,#43dfff 36%,#6eff8c 54%,#fff45e 70%,#ff8f2d 86%,#b35cff 100%)!important;border-color:#fff4a8!important;box-shadow:0 0 0 5px rgba(255,255,255,.78),0 0 28px rgba(255,230,80,.95),0 0 48px rgba(255,0,200,.45),0 10px 0 rgba(0,0,0,.28)!important}@media(max-width:700px){.v178PlayerGrid{grid-template-columns:repeat(auto-fill,minmax(145px,1fr))!important}.v182MiniCard{min-height:210px}.v182Face{width:82px;height:82px}.v182Type,.v182Level{font-size:10px;padding:5px 6px}.v182Name{font-size:16px}.v178CollectionHeader{align-items:flex-start;flex-direction:column}}
+  `; document.head.appendChild(st); }
+  function renderCollectionPage(player){ ensureCss(); const content=document.getElementById("leaderboardContent"); if(!content) return; const cards=Array.isArray(player.publicCollection)?player.publicCollection.map(hydrateFromLocal):[]; cards.sort((a,b)=>String(a.region||"").localeCompare(String(b.region||"")) || Number(b.score||0)-Number(a.score||0)); const name=esc(player.name||player.username||"Player"); const home=esc(player.homeRegion||player.region||""); content.innerHTML=`<div class="v178CollectionHeader"><button type="button" id="v182BackToLeaderboard">← Back to Leaderboard</button><div><div class="v178CollectionTitle">${name}'s DriverMon Cards</div><div class="v178CollectionMeta">${home?`Home region: ${home} • `:""}${cards.length} public cards from Firebase</div></div></div><div class="v178PlayerGrid">${cards.length?cards.map(miniCardHtml).join(""):`<div class="dexLoading">No public cards found for this player yet. They need to refresh once after this update so their full cards publish to Firebase.</div>`}</div>`; const back=document.getElementById("v182BackToLeaderboard"); if(back) back.onclick=function(){ window.showLeaderboardTab(window.currentLeaderboardTab||"power"); }; }
+  function viewPlayer(id){ ensureCss(); const content=document.getElementById("leaderboardContent"); if(content) content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Loading real cards...</div><div class="leaderMeta">Reading this player's public collection from Firebase.</div></div></div>`; if(typeof tradeDb==="undefined"||!tradeDb){ renderCollectionPage(myRow()); return; } tradeDb.ref(LB_PATH+"/"+safe(id)).once("value").then(snap=>{ const row=snap.val(); renderCollectionPage(row?Object.assign({id:safe(id)},row):{name:"Player",publicCollection:[]}); }).catch(err=>{ if(content) content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Could not load cards</div><div class="leaderMeta">${esc(err&&err.message?err.message:err)}</div></div></div>`; }); }
+  window.showLeaderboardTab=function(metric){ ensureCss(); window.currentLeaderboardTab=metric||window.currentLeaderboardTab||"power"; const content=document.getElementById("leaderboardContent"); if(content) content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Loading Firebase leaderboard...</div><div class="leaderMeta">Publishing full card data, then reading all players.</div></div></div>`; publish().finally(()=>readRows().then(rows=>renderLeaderboard(rows,window.currentLeaderboardTab||"power"))); };
+  window.openLeaderboard=function(){ ensureCss(); const overlay=document.getElementById("leaderboardOverlay"); if(overlay) overlay.style.display="block"; window.showLeaderboardTab(window.currentLeaderboardTab||"power"); };
+  window.viewPlayerCollection=viewPlayer;
+  document.addEventListener("click",function(e){ const a=e.target&&e.target.closest?e.target.closest(".leaderAvatarClickV182,.leaderAvatarClickV178,.leaderAvatarClickV177,.leaderAvatarClickV176,.leaderAvatarClickV175"):null; if(a&&a.dataset&&a.dataset.playerId){ e.preventDefault(); e.stopPropagation(); viewPlayer(a.dataset.playerId); }},true);
+  const oldSave=window.saveCollection; if(typeof oldSave==="function") window.saveCollection=function(){ const r=oldSave.apply(this,arguments); setTimeout(publish,200); return r; };
+  window.addEventListener("load",function(){ ensureCss(); setTimeout(publish,700); setTimeout(publish,2200); });
 })();
 </script>
