@@ -6235,6 +6235,339 @@ window.addEventListener("DOMContentLoaded", function(){
 })();
 </script>
 
+
+
+<!-- v174: View another player's public card collection from the leaderboard. -->
+<style>
+.playerCollectionOverlayV174{
+  position:fixed;
+  inset:0;
+  z-index:99999;
+  display:none;
+  background:rgba(0,0,0,.72);
+  padding:18px;
+  overflow:auto;
+}
+.playerCollectionModalV174{
+  width:min(1120px,96vw);
+  margin:20px auto;
+  background:linear-gradient(135deg,#07152e,#132f70 55%,#240e55);
+  color:white;
+  border:4px solid rgba(255,255,255,.28);
+  border-radius:24px;
+  box-shadow:0 18px 50px rgba(0,0,0,.55);
+  padding:16px;
+}
+.playerCollectionHeaderV174{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:12px;
+}
+.playerCollectionTitleV174{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-width:0;
+}
+.playerCollectionTitleV174 img{
+  width:58px;
+  height:58px;
+  border-radius:50%;
+  object-fit:cover;
+  border:3px solid white;
+  background:#111;
+}
+.playerCollectionTitleV174 h2{
+  margin:0;
+  font-size:24px;
+  line-height:1;
+}
+.playerCollectionTitleV174 p{
+  margin:4px 0 0;
+  font-weight:900;
+  color:rgba(255,255,255,.85);
+  font-size:13px;
+}
+.closePlayerCollectionV174{
+  background:linear-gradient(180deg,#ff4d4d,#a40000) !important;
+  padding:10px 12px !important;
+  border-radius:12px !important;
+}
+.playerCollectionGridV174{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(185px,1fr));
+  gap:12px;
+}
+.publicCardV174{
+  position:relative;
+  border-radius:18px;
+  padding:10px;
+  background:rgba(255,255,255,.12);
+  border:2px solid rgba(255,255,255,.25);
+  box-shadow:0 8px 0 rgba(0,0,0,.25);
+  overflow:hidden;
+  min-height:260px;
+}
+.publicCardV174 img,
+.publicCardFaceFallbackV174{
+  width:104px;
+  height:104px;
+  border-radius:50%;
+  margin:6px auto 8px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  object-fit:cover;
+  background:#111a35;
+  border:4px solid white;
+  box-shadow:0 0 0 4px rgba(0,0,0,.25);
+  font-size:36px;
+  font-weight:1000;
+}
+.publicCardNameV174{
+  text-align:center;
+  font-size:18px;
+  line-height:1;
+  font-weight:1000;
+  text-transform:uppercase;
+  margin-bottom:6px;
+}
+.publicCardMetaV174{
+  text-align:center;
+  font-size:12px;
+  line-height:1.35;
+  font-weight:900;
+  color:rgba(255,255,255,.88);
+}
+.publicCardShinyV174{
+  position:absolute;
+  top:8px;
+  right:8px;
+  background:linear-gradient(135deg,#ffe45c,#ff5fd7,#43dfff,#6eff8c);
+  border-radius:999px;
+  padding:4px 7px;
+  font-size:12px;
+  font-weight:1000;
+  border:2px solid white;
+}
+.viewCollectionBtnV174{
+  margin-top:6px !important;
+  padding:7px 10px !important;
+  font-size:11px !important;
+  border-radius:9px !important;
+  background:linear-gradient(180deg,#b829ff,#7200cc) !important;
+  box-shadow:0 3px 0 rgba(0,0,0,.28) !important;
+}
+@media(max-width:700px){
+  .playerCollectionHeaderV174{align-items:flex-start;}
+  .playerCollectionTitleV174 h2{font-size:19px;}
+  .playerCollectionGridV174{grid-template-columns:repeat(auto-fill,minmax(150px,1fr));}
+}
+</style>
+<script>
+(function(){
+  const LB_PATH = "trades/__leaderboardPlayers";
+  const PROFILE_KEYS = ["drivermonPlayerProfile","drivermon_player_profile_v1"];
+  function esc(v){ return String(v ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c])); }
+  function norm(v){ return String(v || "").toLowerCase().replace(/&/g,"and").replace(/[^a-z0-9]+/g," ").trim(); }
+  function defaultIconSafe(){ try{ if(typeof defaultPlayerIcon === "function") return defaultPlayerIcon(); }catch(e){} return ""; }
+  function getDeviceId(){
+    let id = localStorage.getItem("drivermonDevicePlayerId");
+    if(!id){ id = "player_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2,8); localStorage.setItem("drivermonDevicePlayerId", id); }
+    return String(id).replace(/[^a-zA-Z0-9_-]/g,"_");
+  }
+  function readProfile(){
+    try{ if(typeof getPlayerProfile === "function") return getPlayerProfile() || {}; }catch(e){}
+    for(const k of PROFILE_KEYS){ try{ const raw=localStorage.getItem(k); if(raw) return JSON.parse(raw) || {}; }catch(e){} }
+    return {};
+  }
+  function cardRegion(card){
+    try{ if(typeof getHomeRegion === "function" && !(card && (card.region || card.regionCaught || card.caughtRegion || card.location || card.area))) return getHomeRegion(); }catch(e){}
+    return String(card && (card.region || card.regionCaught || card.caughtRegion || card.homeRegion || card.location || card.area || "") || "").trim();
+  }
+  function cardKey(card){
+    try{ if(typeof dexKey === "function") return dexKey(card); }catch(e){}
+    return norm((card && card.name || "") + " " + (card && (card.deliveries || card.uid || ""))).replace(/ /g,"_");
+  }
+  function calcSafe(card){ try{ return typeof calc === "function" ? calc(card) : {score:Number(card && (card.score || card.power) || 0), level:card && card.level || "?"}; }catch(e){ return {score:0, level:"?"}; } }
+  function raritySafe(card, score){ try{ return typeof rarity === "function" ? rarity(score, card && card.manualRarity) : (card && (card.manualRarity || card.rarity || card.rank) || "Common"); }catch(e){ return card && (card.manualRarity || card.rarity || card.rank) || "Common"; } }
+  function imageSafe(card){
+    if(!card) return "";
+    if(card.faceData || card.imageData || card.imgData) return card.faceData || card.imageData || card.imgData;
+    try{ if(typeof faceImages !== "undefined" && faceImages[card.img]) return faceImages[card.img]; }catch(e){}
+    if(card.img && String(card.img).startsWith("data:image")) return card.img;
+    return "";
+  }
+  function publicCollection(){
+    const cards = (typeof drivers !== "undefined" && Array.isArray(drivers)) ? drivers : [];
+    const byKey = new Map();
+    cards.forEach(card=>{
+      if(!card || !card.name) return;
+      const c = calcSafe(card);
+      const key = cardKey(card) || ("card_" + byKey.size);
+      byKey.set(key, {
+        key:key,
+        name:String(card.name || "Unknown Driver").slice(0,60),
+        region:String(cardRegion(card) || "Unknown region").slice(0,40),
+        score:Number(c.score || card.score || card.power || 0),
+        level:String(c.level || card.level || "?"),
+        rarity:String(raritySafe(card, Number(c.score || 0)) || "Common"),
+        shiny:!!card.shiny,
+        image:imageSafe(card),
+        updatedAt:new Date().toISOString()
+      });
+    });
+    return Array.from(byKey.values()).sort((a,b)=>(b.score||0)-(a.score||0));
+  }
+  function currentPublicRow(){
+    const p = readProfile();
+    let region = "";
+    try{ if(typeof getHomeRegion === "function") region = getHomeRegion() || ""; }catch(e){}
+    const collection = publicCollection();
+    const stats = collection.reduce((acc,c)=>{ acc.power += Number(c.score||0); acc.cards += 1; if(c.shiny) acc.shiny += 1; if(String(c.rarity||"").toLowerCase().includes("legend") || Number(c.score||0) >= 2500) acc.legendary += 1; return acc; }, {power:0,cards:0,shiny:0,legendary:0,trader:0});
+    return {
+      id:getDeviceId(),
+      name:String(p.name || p.username || "Player").slice(0,32),
+      icon:p.icon || p.avatar || defaultIconSafe(),
+      homeRegion:region,
+      region:region,
+      stats:stats,
+      publicCollection:collection,
+      collectionUpdatedAt:new Date().toISOString(),
+      updatedAt:new Date().toISOString()
+    };
+  }
+  window.publishPublicPlayerCollection = function(){
+    const row = currentPublicRow();
+    if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve(row);
+    return tradeDb.ref(LB_PATH + "/" + row.id).update(row).then(()=>row).catch(err=>{ console.log("Public collection publish failed", err); return row; });
+  };
+
+  const oldPublishV174 = window.publishPlayerStats;
+  window.publishPlayerStats = function(){
+    const base = (typeof oldPublishV174 === "function") ? Promise.resolve(oldPublishV174.apply(this, arguments)).catch(()=>null) : Promise.resolve(null);
+    return base.then(()=>window.publishPublicPlayerCollection());
+  };
+
+  const oldSaveCollectionV174 = window.saveCollection;
+  if(typeof oldSaveCollectionV174 === "function"){
+    window.saveCollection = function(){
+      const result = oldSaveCollectionV174.apply(this, arguments);
+      setTimeout(()=>{ try{ window.publishPublicPlayerCollection(); }catch(e){} }, 400);
+      return result;
+    };
+  }
+
+  function ensureModal(){
+    let overlay = document.getElementById("playerCollectionOverlayV174");
+    if(overlay) return overlay;
+    overlay = document.createElement("div");
+    overlay.id = "playerCollectionOverlayV174";
+    overlay.className = "playerCollectionOverlayV174";
+    overlay.innerHTML = `<div class="playerCollectionModalV174"><div class="playerCollectionHeaderV174"><div class="playerCollectionTitleV174"><img id="playerCollectionIconV174" src="" alt=""><div><h2 id="playerCollectionNameV174">Player Collection</h2><p id="playerCollectionMetaV174"></p></div></div><button type="button" class="closePlayerCollectionV174" onclick="document.getElementById('playerCollectionOverlayV174').style.display='none'">Close</button></div><div id="playerCollectionGridV174" class="playerCollectionGridV174"></div></div>`;
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", function(e){ if(e.target === overlay) overlay.style.display = "none"; });
+    return overlay;
+  }
+  function renderPublicCard(card){
+    const img = card && card.image ? `<img src="${card.image}" alt="${esc(card.name || "DriverMon")}">` : `<div class="publicCardFaceFallbackV174">?</div>`;
+    return `<div class="publicCardV174">${card && card.shiny ? `<div class="publicCardShinyV174">✨</div>` : ""}${img}<div class="publicCardNameV174">${esc(card && card.name || "Unknown Driver")}</div><div class="publicCardMetaV174">${esc(card && card.region || "Unknown region")}<br>LVL ${esc(card && card.level || "?")} • ${esc(card && card.rarity || "Common")}<br>${Number(card && card.score || 0).toLocaleString()} power</div></div>`;
+  }
+  window.viewPlayerCollection = function(playerId){
+    const overlay = ensureModal();
+    const grid = document.getElementById("playerCollectionGridV174");
+    const title = document.getElementById("playerCollectionNameV174");
+    const meta = document.getElementById("playerCollectionMetaV174");
+    const icon = document.getElementById("playerCollectionIconV174");
+    overlay.style.display = "block";
+    if(grid) grid.innerHTML = `<div class="dexLoading">Loading player collection...</div>`;
+    if(typeof tradeDb === "undefined" || !tradeDb){ if(grid) grid.innerHTML = `<div class="dexLoading">Firebase is not connected on this device.</div>`; return; }
+    const clean = String(playerId || "").replace(/[^a-zA-Z0-9_-]/g,"_");
+    tradeDb.ref(LB_PATH + "/" + clean).once("value").then(snap=>{
+      const row = snap.val() || {};
+      const collection = Array.isArray(row.publicCollection) ? row.publicCollection : [];
+      if(title) title.textContent = `${row.name || "Player"}'s Collection`;
+      if(meta) meta.textContent = `${collection.length} public cards${row.homeRegion ? " • Home region: " + row.homeRegion : ""}`;
+      if(icon) icon.src = row.icon || defaultIconSafe();
+      if(!grid) return;
+      if(!collection.length){
+        grid.innerHTML = `<div class="dexLoading">No public cards published yet. That player needs to create/save a card or refresh their profile once.</div>`;
+        return;
+      }
+      grid.innerHTML = collection.slice().sort((a,b)=>(Number(b.score||0)-Number(a.score||0))).map(renderPublicCard).join("");
+    }).catch(err=>{
+      console.log("View collection failed", err);
+      if(grid) grid.innerHTML = `<div class="dexLoading">Could not load this collection: ${esc(err && err.message ? err.message : err)}</div>`;
+    });
+  };
+
+  window.showLeaderboardTab = function(tab){
+    window.currentLeaderboardTab = tab || window.currentLeaderboardTab || "power";
+    const content = document.getElementById("leaderboardContent");
+    if(content) content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Loading shared leaderboard...</div><div class="leaderMeta">Publishing public collection and reading Firebase players.</div></div></div>`;
+    window.publishPublicPlayerCollection().finally(()=>{
+      if(typeof tradeDb === "undefined" || !tradeDb){ return; }
+      tradeDb.ref(LB_PATH).once("value").then(snap=>{
+        const rows = Object.keys(snap.val() || {}).map(k=>Object.assign({id:k}, snap.val()[k]));
+        const byName = new Map();
+        rows.forEach(r=>{
+          if(!r || !r.name) return;
+          const key = norm(r.name);
+          const current = byName.get(key);
+          const rTime = Date.parse(r.updatedAt || r.collectionUpdatedAt || 0) || 0;
+          const cTime = current ? (Date.parse(current.updatedAt || current.collectionUpdatedAt || 0) || 0) : -1;
+          const rCards = Array.isArray(r.publicCollection) ? r.publicCollection.length : Number(r.stats && r.stats.cards || 0);
+          const cCards = current ? (Array.isArray(current.publicCollection) ? current.publicCollection.length : Number(current.stats && current.stats.cards || 0)) : -1;
+          if(!current || rTime > cTime || rCards > cCards) byName.set(key, r);
+        });
+        const metric = window.currentLeaderboardTab;
+        const label = ({power:"Total Power",cards:"Cards",shiny:"Shiny Cards",legendary:"Legendary Cards",trader:"Trades"})[metric] || "Score";
+        const value = r => Number(r && r.stats && r.stats[metric] || (metric === "cards" && Array.isArray(r.publicCollection) ? r.publicCollection.length : 0));
+        const list = Array.from(byName.values()).sort((a,b)=>value(b)-value(a)).slice(0,10);
+        if(!content) return;
+        if(!list.length){
+          content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">No shared players yet</div><div class="leaderMeta">Save a profile and create at least one card on each device, then refresh.</div></div></div>`;
+          return;
+        }
+        content.innerHTML = list.map((r,i)=>`<div class="leaderEntry ${i===0?'goldLeader':i===1?'silverLeader':i===2?'bronzeLeader':''}"><div class="leaderRank">#${i+1}</div><img class="leaderAvatarClickV175" data-player-id="${esc(r.id)}" src="${esc(r.icon || defaultIconSafe())}" alt="View ${esc(r.name || "Player")} collection" title="Click to view collection" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid white;margin-right:8px;cursor:pointer;"><div class="leaderMain"><div class="leaderName">${esc(r.name || "Player")}</div><div class="leaderMeta">${esc(r.homeRegion ? "Home: " + r.homeRegion + " • " : "")}${Array.isArray(r.publicCollection) ? r.publicCollection.length : Number(r.stats && r.stats.cards || 0)} public cards<br><span class="leaderHintV175">Tap profile picture to view cards</span></div></div><div class="leaderScore"><div class="leaderScoreValue">${Number(value(r)).toLocaleString()}</div><div class="leaderScoreLabel">${esc(label)}</div></div></div>`).join("");
+      }).catch(err=>{
+        console.log("Leaderboard collection read failed", err);
+        if(content) content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Leaderboard Firebase read issue</div><div class="leaderMeta">${esc(err && err.message ? err.message : err)}</div></div></div>`;
+      });
+    });
+  };
+
+  window.addEventListener("load", function(){
+    setTimeout(()=>{ try{ window.publishPublicPlayerCollection(); }catch(e){} }, 1400);
+  });
+})();
+</script>
+
+
+<!-- v175: Leaderboard profile picture opens player collection; no separate View Collection button. -->
+<style>
+.leaderAvatarClickV175{ transition:transform .12s ease, box-shadow .12s ease; }
+.leaderAvatarClickV175:hover{ transform:scale(1.08); box-shadow:0 0 0 3px rgba(255,210,46,.9); }
+.leaderHintV175{ font-size:11px; opacity:.82; font-weight:1000; }
+.viewCollectionBtnV174{ display:none !important; }
+</style>
+<script>
+(function(){
+  document.addEventListener('click', function(e){
+    const avatar = e.target && e.target.closest ? e.target.closest('.leaderAvatarClickV175,[data-player-id][title*=\"collection\"]') : null;
+    if(!avatar) return;
+    const id = avatar.getAttribute('data-player-id');
+    if(id && typeof window.viewPlayerCollection === 'function'){
+      e.preventDefault();
+      e.stopPropagation();
+      window.viewPlayerCollection(id);
+    }
+  }, true);
+})();
+</script>
+
 </body>
 </html>
 
@@ -7307,7 +7640,7 @@ img[alt="DriverDex"]{
     const classes = `dexCard ${owned ? "" : "dexUndiscovered"} ${r}${card && card.shiny ? " shinyDex" : ""}`;
     return `<div class="${classes}">
       ${img ? `<img src="${img}" alt="${esc(card.name || "DriverMon")}">` : `<div class="dexMysteryIcon">?</div>`}
-      <div class="dexName">${owned && card && card.shiny ? "✨ " : ""}${owned ? esc(card && card.name ? card.name : "Unknown") : "Unknown Driver"}</div>
+      <div class="dexName">${owned && card && card.shiny ? "✨ " : ""}${esc(card && card.name ? card.name : "Unknown Driver")}</div>
       <div class="dexMeta">LVL ${esc(c.level || "?")}<br>${esc(r)}${region ? `<br><span class="dexRegionNote">${esc(region)}</span>` : ""}</div>
     </div>`;
   }
@@ -7656,7 +7989,7 @@ img[alt="DriverDex"]{
     const r = raritySafe(c.score, card && card.manualRarity);
     const img = owned ? cardImg(card) : "";
     const region = cardRegion(card);
-    return `<div class="dexCard ${owned ? "" : "dexUndiscovered"} ${esc(r)}${card && card.shiny ? " shinyDex" : ""}">${img ? `<img src="${img}" alt="${esc(card.name || "DriverMon")}">` : `<div class="dexMysteryIcon">?</div>`}<div class="dexName">${owned && card && card.shiny ? "✨ " : ""}${owned ? esc(card && card.name ? card.name : "Unknown") : "Unknown Driver"}</div><div class="dexMeta">LVL ${esc(c.level || "?")}<br>${esc(r)}${region ? `<br><span class="dexRegionNote">${esc(region)}</span>` : ""}</div></div>`;
+    return `<div class="dexCard ${owned ? "" : "dexUndiscovered"} ${esc(r)}${card && card.shiny ? " shinyDex" : ""}">${img ? `<img src="${img}" alt="${esc(card.name || "DriverMon")}">` : `<div class="dexMysteryIcon">?</div>`}<div class="dexName">${owned && card && card.shiny ? "✨ " : ""}${esc(card && card.name ? card.name : "Unknown Driver")}</div><div class="dexMeta">LVL ${esc(c.level || "?")}<br>${esc(r)}${region ? `<br><span class="dexRegionNote">${esc(region)}</span>` : ""}</div></div>`;
   }
   function mergeCards(localCards, globalCards){
     const map = new Map();
@@ -7766,5 +8099,30 @@ img[alt="DriverDex"]{
     ensureProfileRegionSelectCompact();
     setTimeout(()=>{ try{ if(getHomeRegion() && typeof publishPlayerStats === "function") publishPlayerStats(); }catch(e){} }, 1000);
   });
+})();
+</script>
+
+
+<!-- v173 DriverDex tweak: undiscovered cards show the real driver name but keep the face hidden until collected. -->
+<script>
+(function(){
+  function escV173(s){
+    try{ return typeof esc === "function" ? esc(s) : String(s || "").replace(/[&<>"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }catch(e){ return String(s || ""); }
+  }
+  if(typeof window.loadDriverDex === "function"){
+    const oldLoadV173 = window.loadDriverDex;
+    window.loadDriverDex = function(){
+      oldLoadV173.apply(this, arguments);
+      setTimeout(function(){
+        document.querySelectorAll("#driverDexGrid .dexCard.dexUndiscovered").forEach(function(card){
+          const nameEl = card.querySelector(".dexName");
+          if(nameEl && nameEl.textContent.trim() === "Unknown Driver"){
+            // Fallback only. Main v173 patch above should now render the real name from card data.
+            nameEl.textContent = "Driver name unavailable";
+          }
+        });
+      }, 250);
+    };
+  }
 })();
 </script>
