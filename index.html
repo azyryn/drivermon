@@ -6079,6 +6079,162 @@ window.addEventListener("DOMContentLoaded", function(){
 })();
 </script>
 
+
+
+<script>
+/* v170: DriverDex uses all real card regions dynamically, not one hard-coded/user-only region */
+(function(){
+  function esc(v){
+    return String(v ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
+  }
+  function norm(v){
+    return String(v || "").toLowerCase().replace(/&/g,"and").replace(/[^a-z0-9]+/g," ").trim();
+  }
+  function regionName(card){
+    const r = card && (card.region || card.regionCaught || card.caughtRegion || card.locationRegion || card.location || card.area || card.homeRegion);
+    return String(r || "").trim() || "Unknown Region";
+  }
+  function regionKey(cardOrName){
+    return norm(typeof cardOrName === "string" ? cardOrName : regionName(cardOrName));
+  }
+  function safeCalc(card){
+    try { return (typeof calc === "function") ? calc(card) : {score:0, level:"?"}; }
+    catch(e){ return {score:0, level:"?"}; }
+  }
+  function safeRarity(score, manual){
+    try { return (typeof rarity === "function") ? rarity(score, manual) : "Common"; }
+    catch(e){ return "Common"; }
+  }
+  function looseCardKey(card){
+    try{ if(typeof dexKey === "function") return dexKey(card); }catch(e){}
+    return norm([card && card.name, card && card.deliveries, regionName(card)].join(" ")).replace(/ /g,"_");
+  }
+  function imageFor(card){
+    if(!card) return "";
+    if(card.faceData || card.imageData || card.imgData) return card.faceData || card.imageData || card.imgData;
+    try{ if(typeof faceImages !== "undefined" && faceImages[card.img]) return faceImages[card.img]; }catch(e){}
+    if(card.img && String(card.img).startsWith("data:image")) return card.img;
+    return "";
+  }
+  function localCardsNow(){
+    return (typeof drivers !== "undefined" && Array.isArray(drivers)) ? drivers.slice() : [];
+  }
+  function publishOne(card){
+    if(typeof tradeDb === "undefined" || !tradeDb || !card) return Promise.resolve();
+    const key = looseCardKey(card) || ("card_" + Date.now());
+    const copy = JSON.parse(JSON.stringify(card));
+    copy.dexKey = key;
+    copy.region = regionName(card) === "Unknown Region" ? "" : regionName(card);
+    copy.discoveredAt = copy.discoveredAt || new Date().toISOString();
+    copy.lastFoundAt = new Date().toISOString();
+    return tradeDb.ref("discoveredCards/" + key).transaction(existing => {
+      const merged = Object.assign({}, existing || {}, copy);
+      merged.region = copy.region || merged.region || "";
+      merged.timesFound = Math.max(Number(existing && existing.timesFound || 0), 0) + 1;
+      merged.lastFoundAt = new Date().toISOString();
+      if(copy.shiny) merged.shiny = true;
+      return merged;
+    }).catch(err => console.log("DriverDex publish failed", err));
+  }
+  window.publishToDriverDex = publishOne;
+  window.publishCollectionToDriverDex = function(){
+    return Promise.all(localCardsNow().map(publishOne));
+  };
+  function ownedHtml(card){
+    const c = safeCalc(card), r = safeRarity(c.score, card && card.manualRarity), img = imageFor(card);
+    const region = regionName(card);
+    return `<div class="dexCard ${esc(r)}${card && card.shiny ? " shinyDex" : ""}">
+      ${img ? `<img src="${img}" alt="${esc(card && card.name || "DriverMon")}">` : `<div class="dexMysteryIcon">?</div>`}
+      <div class="dexName">${card && card.shiny ? "✨ " : ""}${esc(card && card.name || "Unknown")}</div>
+      <div class="dexMeta">LVL ${esc(c.level || "?")}<br>${esc(r)}<span class="dexRegionNote">${esc(region)}</span></div>
+    </div>`;
+  }
+  function mysteryHtml(card){
+    const c = safeCalc(card), r = safeRarity(c.score, card && card.manualRarity);
+    const region = regionName(card);
+    return `<div class="dexCard dexUndiscovered ${esc(r)}">
+      <div class="dexMysteryIcon">?</div>
+      <div class="dexName">${esc(card && card.name || "Unknown Driver")}</div>
+      <div class="dexMeta">LVL ${esc(c.level || "?")}<br>${esc(r)}<span class="dexRegionNote">${esc(region)}${card && card.country ? " · " + esc(card.country) : ""}</span></div>
+    </div>`;
+  }
+  function section(title, html){
+    return `<div class="dexSectionTitle">${esc(title)}</div>` + (html || `<div class="dexLoading">No cards here yet.</div>`);
+  }
+  window.loadDriverDex = function(){
+    const grid = document.getElementById("driverDexGrid");
+    const localCards = localCardsNow();
+    const ownedKeys = new Set(localCards.map(looseCardKey));
+    if(grid) grid.innerHTML = `<div class="dexLoading">Loading real DriverDex regions...</div>`;
+
+    publishCollectionToDriverDex().finally(()=>{
+      const render = (globalCards)=>{
+        const realGlobal = (globalCards || [])
+          .filter(c => c && !c.demoUndiscovered && !String(c.uid || "").startsWith("demo_undiscovered_"));
+
+        const byRegion = new Map();
+        realGlobal.forEach(card => {
+          const key = regionKey(card);
+          const label = regionName(card);
+          if(!byRegion.has(key)) byRegion.set(key, {label, cards:[]});
+          byRegion.get(key).cards.push(card);
+        });
+
+        const ownedPart = section("Your Cards", localCards.length ? localCards.map(ownedHtml).join("") : `<div class="dexLoading">No cards in your collection yet.</div>`);
+        const regionSections = Array.from(byRegion.values())
+          .sort((a,b)=>a.label.localeCompare(b.label))
+          .map(group => {
+            const unowned = group.cards
+              .filter(card => !ownedKeys.has(looseCardKey(card)))
+              .sort((a,b)=>(safeCalc(b).score||0)-(safeCalc(a).score||0));
+            const ownedInRegion = group.cards.length - unowned.length;
+            const title = `${group.label} — ${ownedInRegion}/${group.cards.length} discovered by you`;
+            return section(title, unowned.length ? unowned.map(mysteryHtml).join("") : `<div class="dexLoading">You have discovered all real cards currently known in ${esc(group.label)}.</div>`);
+          }).join("");
+
+        if(grid) grid.innerHTML = ownedPart + (regionSections || section("Real Regional DriverDex", `<div class="dexLoading">No real Firebase card regions yet. Create cards with a region on another device, then refresh.</div>`));
+
+        const disc = document.getElementById("dexDiscoveredCount");
+        const shiny = document.getElementById("dexShinyCount");
+        const leg = document.getElementById("dexLegendaryCount");
+        const worldwide = document.getElementById("dexWorldwideCount");
+        const mini = document.getElementById("dexMiniStat");
+        if(disc) disc.textContent = `${localCards.length} your cards`;
+        if(shiny) shiny.textContent = `${localCards.filter(c=>c && c.shiny).length} shiny`;
+        if(leg) leg.textContent = `${localCards.filter(c=>{ const s=safeCalc(c).score||0; return s>=2500 || (c && c.manualRarity === "Legendary"); }).length} legendary`;
+        if(worldwide) worldwide.textContent = `${realGlobal.length} worldwide`;
+        if(mini) mini.textContent = `${byRegion.size} real regions · ${realGlobal.length} real cards`;
+      };
+      if(typeof tradeDb === "undefined" || !tradeDb){ render([]); return; }
+      tradeDb.ref("discoveredCards").once("value").then(snap=>{
+        render(Object.values(snap.val() || {}));
+      }).catch(err=>{
+        console.log("DriverDex Firebase read failed", err);
+        render([]);
+      });
+    });
+  };
+
+  const oldOpen = window.openDriverDex;
+  window.openDriverDex = function(){
+    if(typeof oldOpen === "function") oldOpen.apply(this, arguments);
+    const overlay = document.getElementById("driverDexOverlay");
+    if(overlay) overlay.style.display = "block";
+    setTimeout(window.loadDriverDex, 120);
+  };
+
+  const oldSaveCollection = window.saveCollection;
+  if(typeof oldSaveCollection === "function"){
+    window.saveCollection = function(){
+      const result = oldSaveCollection.apply(this, arguments);
+      setTimeout(()=>{ try{ publishCollectionToDriverDex(); }catch(e){} }, 250);
+      return result;
+    };
+  }
+  window.addEventListener("load", function(){ setTimeout(()=>{ try{ publishCollectionToDriverDex(); }catch(e){} }, 1200); });
+})();
+</script>
+
 </body>
 </html>
 
@@ -6758,5 +6914,857 @@ img[alt="DriverDex"]{
       setTimeout(window.loadDriverDex, 80);
     };
   }
+})();
+</script>
+
+<script>
+/* v169: real DriverDex region matching + leaderboard de-dupe */
+(function(){
+  function esc(v){
+    return String(v ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
+  }
+  function norm(v){
+    return String(v || "")
+      .toLowerCase()
+      .replace(/&/g,"and")
+      .replace(/[^a-z0-9]+/g," ")
+      .trim();
+  }
+  function cardRegion(card){
+    return norm(card && (card.region || card.regionCaught || card.caughtRegion || card.location || card.area));
+  }
+  function userRegionNow(){
+    try{ if(typeof getUserRegion === "function") return getUserRegion(); }catch(e){}
+    try{ return localStorage.getItem("drivermon_user_region") || localStorage.getItem("drivermonUserRegion") || ""; }catch(e){}
+    return "";
+  }
+  window.regionMatchesUser = function(card, region){
+    const cr = cardRegion(card);
+    const ur = norm(region || userRegionNow());
+    if(!ur) return true;
+    if(!cr) return false;
+    return cr === ur || cr.includes(ur) || ur.includes(cr);
+  };
+
+  function safeCalc(card){
+    try { return (typeof calc === "function") ? calc(card) : {score:0, level:"?"}; }
+    catch(e){ return {score:0, level:"?"}; }
+  }
+  function safeRarity(score, manual){
+    try { return (typeof rarity === "function") ? rarity(score, manual) : "Common"; }
+    catch(e){ return "Common"; }
+  }
+  function dexKeyLoose(card){
+    try{
+      if(typeof dexKey === "function") return dexKey(card);
+    }catch(e){}
+    return norm((card && card.name) + " " + (card && (card.deliveries || 0))).replace(/ /g,"_");
+  }
+  function imageFor(card){
+    if(!card) return "";
+    if(card.faceData || card.imageData || card.imgData) return card.faceData || card.imageData || card.imgData;
+    try{ if(typeof faceImages !== "undefined" && faceImages[card.img]) return faceImages[card.img]; }catch(e){}
+    if(card.img && String(card.img).startsWith("data:image")) return card.img;
+    return "";
+  }
+  function publishOne(card){
+    if(typeof tradeDb === "undefined" || !tradeDb || !card) return Promise.resolve();
+    const key = dexKeyLoose(card) || ("card_" + Date.now());
+    const copy = JSON.parse(JSON.stringify(card));
+    copy.dexKey = key;
+    copy.region = card.region || card.regionCaught || card.caughtRegion || card.location || card.area || "";
+    copy.discoveredAt = copy.discoveredAt || new Date().toISOString();
+    copy.lastFoundAt = new Date().toISOString();
+    return tradeDb.ref("discoveredCards/" + key).transaction(existing => {
+      const merged = Object.assign({}, existing || {}, copy);
+      merged.timesFound = Math.max(Number(existing && existing.timesFound || 0), 0) + 1;
+      merged.lastFoundAt = new Date().toISOString();
+      if(copy.shiny) merged.shiny = true;
+      return merged;
+    }).catch(err => console.log("DriverDex publish failed", err));
+  }
+  window.publishCollectionToDriverDex = function(){
+    const cards = (typeof drivers !== "undefined" && Array.isArray(drivers)) ? drivers : [];
+    return Promise.all(cards.map(publishOne));
+  };
+  window.publishToDriverDex = publishOne;
+
+  function ownedCardHtml(card){
+    const c = safeCalc(card);
+    const r = safeRarity(c.score, card && card.manualRarity);
+    const img = imageFor(card);
+    const region = card && (card.region || card.regionCaught || card.caughtRegion) ? `<br><span class="dexRegionNote">${esc(card.region || card.regionCaught || card.caughtRegion)}</span>` : "";
+    return `<div class="dexCard ${r}${card && card.shiny ? " shinyDex" : ""}">
+      ${img ? `<img src="${img}" alt="${esc(card.name || "DriverMon")}">` : `<div class="dexMysteryIcon">?</div>`}
+      <div class="dexName">${card && card.shiny ? "✨ " : ""}${esc(card && card.name ? card.name : "Unknown")}</div>
+      <div class="dexMeta">LVL ${esc(c.level || "?")}<br>${esc(r)}${region}</div>
+    </div>`;
+  }
+  function mysteryKnownCardHtml(card){
+    const c = safeCalc(card);
+    const r = safeRarity(c.score, card && card.manualRarity);
+    const region = card && (card.region || card.country) ? `<span class="dexRegionNote">${esc(card.region || "")}${card.country ? " · " + esc(card.country) : ""}</span>` : "";
+    return `<div class="dexCard dexUndiscovered ${r}">
+      <div class="dexMysteryIcon">?</div>
+      <div class="dexName">${esc(card && card.name ? card.name : "Unknown Driver")}</div>
+      <div class="dexMeta">LVL ${esc(c.level || "?")}<br>${esc(r)}${region}</div>
+    </div>`;
+  }
+  window.loadDriverDex = function(){
+    const grid = document.getElementById("driverDexGrid");
+    const userRegion = userRegionNow();
+    const localCards = (typeof drivers !== "undefined" && Array.isArray(drivers)) ? drivers.slice() : [];
+    const ownedKeys = new Set(localCards.map(dexKeyLoose));
+    if(grid) grid.innerHTML = `<div class="dexLoading">Loading real DriverDex data...</div>`;
+
+    publishCollectionToDriverDex().finally(()=>{
+      const render = (globalCards)=>{
+        const realGlobal = (globalCards || []).filter(c => c && !c.demoUndiscovered && !String(c.uid || "").startsWith("demo_undiscovered_"));
+        const regional = userRegion ? realGlobal.filter(c => window.regionMatchesUser(c, userRegion)) : realGlobal;
+        const unownedRegional = regional.filter(c => !ownedKeys.has(dexKeyLoose(c)));
+        const ownedHtml = `<div class="dexSectionTitle">Your Cards</div>` + (localCards.length ? localCards.map(ownedCardHtml).join("") : `<div class="dexLoading">No cards in your collection yet.</div>`);
+        const regionTitle = userRegion ? `Other real ${esc(userRegion)} discoveries you do not own yet` : "Other real worldwide discoveries you do not own yet";
+        const otherHtml = `<div class="dexSectionTitle">${regionTitle}</div>` + (unownedRegional.length ? unownedRegional.map(mysteryKnownCardHtml).join("") : `<div class="dexLoading">No other real cards for this region yet. Your new cards should still appear above under Your Cards.</div>`);
+        if(grid) grid.innerHTML = ownedHtml + otherHtml;
+        const disc = document.getElementById("dexDiscoveredCount");
+        const shiny = document.getElementById("dexShinyCount");
+        const leg = document.getElementById("dexLegendaryCount");
+        const worldwide = document.getElementById("dexWorldwideCount");
+        const mini = document.getElementById("dexMiniStat");
+        if(disc) disc.textContent = `${localCards.length} your cards`;
+        if(shiny) shiny.textContent = `${localCards.filter(c=>c && c.shiny).length} shiny`;
+        if(leg) leg.textContent = `${localCards.filter(c=>{ const s=safeCalc(c).score||0; return s>=2500 || (c && c.manualRarity === "Legendary"); }).length} legendary`;
+        if(worldwide) worldwide.textContent = `${realGlobal.length} worldwide`;
+        if(mini) mini.textContent = userRegion ? `${userRegion}: ${regional.length} real regional discoveries` : `${realGlobal.length} real global discoveries`;
+      };
+      if(typeof tradeDb === "undefined" || !tradeDb){ render([]); return; }
+      tradeDb.ref("discoveredCards").once("value").then(snap=>{
+        const list = Object.values(snap.val() || {}).sort((a,b)=>(safeCalc(b).score||0)-(safeCalc(a).score||0));
+        render(list);
+      }).catch(err=>{
+        console.log("DriverDex Firebase read failed", err);
+        render([]);
+      });
+    });
+  };
+
+  const oldOpen = window.openDriverDex;
+  window.openDriverDex = function(){
+    if(typeof oldOpen === "function") oldOpen.apply(this, arguments);
+    const overlay = document.getElementById("driverDexOverlay");
+    if(overlay) overlay.style.display = "block";
+    setTimeout(window.loadDriverDex, 100);
+  };
+
+  const oldSaveCollection = window.saveCollection;
+  if(typeof oldSaveCollection === "function"){
+    window.saveCollection = function(){
+      const result = oldSaveCollection.apply(this, arguments);
+      setTimeout(()=>{ try{ publishCollectionToDriverDex(); }catch(e){} }, 250);
+      return result;
+    };
+  }
+
+  const LB_PATH = "trades/__leaderboardPlayers";
+  const oldShow = window.showLeaderboardTab;
+  window.showLeaderboardTab = function(tab){
+    window.currentLeaderboardTab = tab || window.currentLeaderboardTab || "power";
+    const content = document.getElementById("leaderboardContent");
+    if(content) content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Loading shared leaderboard...</div><div class="leaderMeta">Removing duplicate player records.</div></div></div>`;
+    const publish = (typeof publishPlayerStats === "function") ? publishPlayerStats() : Promise.resolve();
+    publish.finally(()=>{
+      if(typeof tradeDb === "undefined" || !tradeDb){ if(typeof oldShow === "function") oldShow(tab); return; }
+      tradeDb.ref(LB_PATH).once("value").then(snap=>{
+        const rows = Object.keys(snap.val() || {}).map(k=>Object.assign({id:k}, snap.val()[k]));
+        const byName = new Map();
+        rows.forEach(r=>{
+          if(!r || !r.name) return;
+          const key = norm(r.name);
+          const current = byName.get(key);
+          const rTime = Date.parse(r.updatedAt || 0) || 0;
+          const cTime = current ? (Date.parse(current.updatedAt || 0) || 0) : -1;
+          const rPower = Number(r.stats && r.stats.power || 0);
+          const cPower = current ? Number(current.stats && current.stats.power || 0) : -1;
+          if(!current || rTime > cTime || rPower > cPower) byName.set(key, r);
+        });
+        const value = r => Number(r && r.stats && r.stats[window.currentLeaderboardTab] || 0);
+        const label = ({power:"Total Power",cards:"Cards",shiny:"Shiny Cards",legendary:"Legendary Cards",trader:"Trades"})[window.currentLeaderboardTab] || "Score";
+        const list = Array.from(byName.values()).sort((a,b)=>value(b)-value(a)).slice(0,10);
+        if(!content) return;
+        if(!list.length){
+          content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">No shared players yet</div><div class="leaderMeta">Save a profile and create at least one card on each device, then refresh.</div></div></div>`;
+          return;
+        }
+        content.innerHTML = list.map((r,i)=>`<div class="leaderEntry ${i===0?'goldLeader':i===1?'silverLeader':i===2?'bronzeLeader':''}">
+          <div class="leaderRank">#${i+1}</div>
+          <img src="${esc(r.icon || "")}" alt="" style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid white;margin-right:8px;">
+          <div class="leaderMain"><div class="leaderName">${esc(r.name || "Player")}</div><div class="leaderMeta">Updated ${esc(r.updatedAt ? new Date(r.updatedAt).toLocaleDateString() : "recently")}</div></div>
+          <div class="leaderScore"><div class="leaderScoreValue">${Number(value(r)).toLocaleString()}</div><div class="leaderScoreLabel">${esc(label)}</div></div>
+        </div>`).join("");
+      }).catch(err=>{
+        console.log("Leaderboard read failed", err);
+        if(content) content.innerHTML = `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Leaderboard Firebase read issue</div><div class="leaderMeta">${esc(err && err.message ? err.message : err)}</div></div></div>`;
+      });
+    });
+  };
+
+  window.addEventListener("load", function(){ setTimeout(()=>{ try{ publishCollectionToDriverDex(); }catch(e){} }, 1200); });
+})();
+</script>
+
+<style>
+/* v171 Option C: home-region DriverDex helpers */
+.driverdexRegionPicker{
+  background:rgba(255,255,255,.10);
+  border:2px solid rgba(255,255,255,.18);
+  border-radius:16px;
+  padding:12px;
+  margin:0 0 12px 0;
+  display:flex;
+  gap:10px;
+  align-items:center;
+  flex-wrap:wrap;
+  font-weight:900;
+}
+.driverdexRegionPicker select{
+  padding:9px 10px;
+  border-radius:10px;
+  border:1px solid rgba(255,255,255,.25);
+  background:#111b38;
+  color:white;
+  font-weight:900;
+}
+.driverdexRegionSubhead{
+  grid-column:1/-1;
+  margin:4px 0 0;
+  opacity:.9;
+  font-size:12px;
+  font-weight:900;
+}
+.playerRegionSelect{
+  width:100%;
+  padding:10px;
+  border-radius:12px;
+  border:1px solid #bdc7d8;
+  font-weight:900;
+  margin:6px 0 10px;
+}
+</style>
+
+<script>
+/* v171: Option C DriverDex + saved home region */
+(function(){
+  const REGION_KEYS = ["drivermon_user_region","drivermonUserRegion","drivermon_home_region"];
+  const PROFILE_KEYS = ["drivermon_player_profile_v1","drivermonPlayerProfile"];
+  const REGION_OPTIONS = [
+    "Brisbane","Gold Coast","Logan","Ipswich","Sunshine Coast","Toowoomba","Northern Rivers",
+    "Sydney","Melbourne","Adelaide","Perth","Darwin","Hobart","International"
+  ];
+
+  function esc(v){
+    return String(v ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));
+  }
+  function norm(v){
+    return String(v || "").toLowerCase().replace(/&/g,"and").replace(/[^a-z0-9]+/g," ").trim();
+  }
+  function prettyRegion(v){
+    const raw = String(v || "").trim();
+    if(!raw) return "";
+    const found = REGION_OPTIONS.find(r => norm(r) === norm(raw));
+    return found || raw.replace(/\s+/g," ").replace(/\b\w/g, m => m.toUpperCase());
+  }
+  function cardRegionRaw(card){
+    return prettyRegion(card && (card.region || card.regionCaught || card.caughtRegion || card.homeRegion || card.location || card.area || ""));
+  }
+  function getStoredProfile(){
+    for(const key of PROFILE_KEYS){
+      try{
+        const raw = localStorage.getItem(key);
+        if(raw){
+          const p = JSON.parse(raw);
+          if(p && typeof p === "object") return p;
+        }
+      }catch(e){}
+    }
+    try{ if(typeof getPlayerProfile === "function") return getPlayerProfile() || {}; }catch(e){}
+    return {};
+  }
+  function getHomeRegion(){
+    for(const key of REGION_KEYS){
+      try{
+        const v = localStorage.getItem(key);
+        if(v) return prettyRegion(v);
+      }catch(e){}
+    }
+    const p = getStoredProfile();
+    return prettyRegion(p.homeRegion || p.region || p.userRegion || "");
+  }
+  function setHomeRegion(region){
+    const clean = prettyRegion(region);
+    if(!clean) return "";
+    REGION_KEYS.forEach(k=>{ try{ localStorage.setItem(k, clean); }catch(e){} });
+    PROFILE_KEYS.forEach(k=>{
+      try{
+        const existing = JSON.parse(localStorage.getItem(k) || "{}");
+        existing.homeRegion = clean;
+        existing.region = clean;
+        existing.updatedAt = new Date().toISOString();
+        localStorage.setItem(k, JSON.stringify(existing));
+      }catch(e){}
+    });
+    return clean;
+  }
+  window.getUserRegion = getHomeRegion;
+  window.setUserRegion = setHomeRegion;
+
+  function ensureProfileRegionSelect(){
+    const modal = document.querySelector("#playerProfileOverlay .playerProfileModal") || document.querySelector(".playerProfileModal");
+    if(!modal || document.getElementById("playerHomeRegionInput")) return;
+    const status = document.getElementById("playerProfileStatus");
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `<label class="playerLabel" for="playerHomeRegionInput">Home region</label>
+      <select id="playerHomeRegionInput" class="playerRegionSelect">
+        <option value="">Choose your home region</option>
+        ${REGION_OPTIONS.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join("")}
+      </select>`;
+    if(status && status.parentNode) status.parentNode.insertBefore(wrap, status);
+    else modal.appendChild(wrap);
+    const sel = document.getElementById("playerHomeRegionInput");
+    if(sel){
+      sel.value = getHomeRegion();
+      sel.addEventListener("change", function(){
+        setHomeRegion(this.value);
+        try{ if(typeof publishPlayerStats === "function") publishPlayerStats(); }catch(e){}
+      });
+    }
+  }
+
+  const oldOpenProfile = window.openPlayerProfileEditor;
+  window.openPlayerProfileEditor = function(){
+    if(typeof oldOpenProfile === "function") oldOpenProfile.apply(this, arguments);
+    setTimeout(()=>{
+      ensureProfileRegionSelect();
+      const sel = document.getElementById("playerHomeRegionInput");
+      if(sel) sel.value = getHomeRegion();
+    }, 60);
+  };
+
+  const oldSetPlayerProfileUI = window.setPlayerProfileUI;
+  if(typeof oldSetPlayerProfileUI === "function"){
+    window.setPlayerProfileUI = function(profile){
+      oldSetPlayerProfileUI(profile);
+      ensureProfileRegionSelect();
+      const sel = document.getElementById("playerHomeRegionInput");
+      if(sel) sel.value = prettyRegion((profile && (profile.homeRegion || profile.region)) || getHomeRegion());
+    };
+  }
+
+  const oldSaveProfile = window.savePlayerProfile;
+  window.savePlayerProfile = function(){
+    const region = document.getElementById("playerHomeRegionInput")?.value || getHomeRegion();
+    if(region) setHomeRegion(region);
+    if(typeof oldSaveProfile === "function") oldSaveProfile.apply(this, arguments);
+    const p = getStoredProfile();
+    const clean = setHomeRegion(region || p.homeRegion || p.region || "");
+    PROFILE_KEYS.forEach(k=>{
+      try{
+        const existing = JSON.parse(localStorage.getItem(k) || "{}");
+        existing.name = existing.name || p.name || "Player";
+        existing.icon = existing.icon || p.icon || (typeof defaultPlayerIcon === "function" ? defaultPlayerIcon() : "");
+        if(clean){ existing.homeRegion = clean; existing.region = clean; }
+        existing.updatedAt = new Date().toISOString();
+        localStorage.setItem(k, JSON.stringify(existing));
+      }catch(e){}
+    });
+    try{ if(typeof publishPlayerStats === "function") publishPlayerStats(); }catch(e){}
+    try{ if(typeof loadDriverDex === "function") loadDriverDex(); }catch(e){}
+  };
+
+  function dexKeyLoose(card){
+    try{ if(typeof dexKey === "function") return dexKey(card); }catch(e){}
+    return norm((card && card.name) + " " + (card && (card.deliveries || 0))).replace(/ /g,"_");
+  }
+  function safeCalc(card){
+    try{ return (typeof calc === "function") ? calc(card) : {score:Number(card && (card.score || card.power) || 0), level:"?"}; }
+    catch(e){ return {score:0, level:"?"}; }
+  }
+  function safeRarity(score, manual){
+    try{ return (typeof rarity === "function") ? rarity(score, manual) : (manual || "Common"); }
+    catch(e){ return manual || "Common"; }
+  }
+  function imageFor(card){
+    if(!card) return "";
+    if(card.faceData || card.imageData || card.imgData) return card.faceData || card.imageData || card.imgData;
+    try{ if(typeof faceImages !== "undefined" && faceImages[card.img]) return faceImages[card.img]; }catch(e){}
+    if(card.img && String(card.img).startsWith("data:image")) return card.img;
+    return "";
+  }
+  function cardHtml(card, owned){
+    const c = safeCalc(card);
+    const r = safeRarity(c.score, card && card.manualRarity);
+    const img = owned ? imageFor(card) : "";
+    const region = cardRegionRaw(card);
+    const classes = `dexCard ${owned ? "" : "dexUndiscovered"} ${r}${card && card.shiny ? " shinyDex" : ""}`;
+    return `<div class="${classes}">
+      ${img ? `<img src="${img}" alt="${esc(card.name || "DriverMon")}">` : `<div class="dexMysteryIcon">?</div>`}
+      <div class="dexName">${owned && card && card.shiny ? "✨ " : ""}${owned ? esc(card && card.name ? card.name : "Unknown") : "Unknown Driver"}</div>
+      <div class="dexMeta">LVL ${esc(c.level || "?")}<br>${esc(r)}${region ? `<br><span class="dexRegionNote">${esc(region)}</span>` : ""}</div>
+    </div>`;
+  }
+  function regionMatches(card, region){
+    return norm(cardRegionRaw(card)) === norm(region);
+  }
+  function mergeCards(localCards, globalCards){
+    const map = new Map();
+    (globalCards || []).forEach(c=>{
+      if(!c || c.demoUndiscovered || String(c.uid || "").startsWith("demo_")) return;
+      const key = dexKeyLoose(c);
+      if(key) map.set(key, c);
+    });
+    (localCards || []).forEach(c=>{
+      const key = dexKeyLoose(c);
+      if(key) map.set(key, Object.assign({}, map.get(key) || {}, c));
+    });
+    return Array.from(map.values()).filter(c=>cardRegionRaw(c));
+  }
+  function uniqueRegions(cards, home){
+    const set = new Set();
+    cards.forEach(c=>{ const r = cardRegionRaw(c); if(r) set.add(r); });
+    const arr = Array.from(set).sort((a,b)=>a.localeCompare(b));
+    if(home && !arr.some(r=>norm(r)===norm(home))) arr.unshift(home);
+    return arr;
+  }
+  function pickerHtml(home, regions){
+    const options = Array.from(new Set([...REGION_OPTIONS, ...regions])).filter(Boolean);
+    return `<div class="driverdexRegionPicker">
+      <span>🏠 Home region:</span>
+      <select id="driverDexHomeRegionSelect">
+        <option value="">Choose region</option>
+        ${options.map(r=>`<option value="${esc(r)}" ${norm(r)===norm(home)?"selected":""}>${esc(r)}</option>`).join("")}
+      </select>
+      <span class="driverdexRegionSubhead">Your home region appears first. Other regions still show below for trading goals.</span>
+    </div>`;
+  }
+  function publishOne(card){
+    if(typeof tradeDb === "undefined" || !tradeDb || !card) return Promise.resolve();
+    const key = dexKeyLoose(card) || ("card_" + Date.now());
+    const copy = JSON.parse(JSON.stringify(card));
+    copy.dexKey = key;
+    copy.region = cardRegionRaw(card);
+    copy.lastFoundAt = new Date().toISOString();
+    return tradeDb.ref("discoveredCards/" + key).transaction(existing => Object.assign({}, existing || {}, copy, {
+      timesFound: Math.max(Number(existing && existing.timesFound || 0), 0) + 1,
+      lastFoundAt: new Date().toISOString()
+    })).catch(err => console.log("DriverDex publish failed", err));
+  }
+  window.publishCollectionToDriverDex = function(){
+    const cards = (typeof drivers !== "undefined" && Array.isArray(drivers)) ? drivers : [];
+    return Promise.all(cards.filter(c=>cardRegionRaw(c)).map(publishOne));
+  };
+  window.publishToDriverDex = publishOne;
+
+  window.loadDriverDex = function(){
+    const grid = document.getElementById("driverDexGrid");
+    if(!grid) return;
+    let home = getHomeRegion();
+    const localCards = (typeof drivers !== "undefined" && Array.isArray(drivers)) ? drivers.slice() : [];
+    const ownedKeys = new Set(localCards.map(dexKeyLoose));
+    grid.innerHTML = `<div class="dexLoading">Loading regional DriverDex...</div>`;
+
+    publishCollectionToDriverDex().finally(()=>{
+      const finish = (globalCards)=>{
+        const all = mergeCards(localCards, globalCards || []);
+        const regions = uniqueRegions(all, home);
+        const localRegionFallback = localCards.map(cardRegionRaw).find(Boolean);
+        if(!home && localRegionFallback){ home = setHomeRegion(localRegionFallback); }
+
+        const homeRegion = home || regions[0] || "";
+        const homePool = homeRegion ? all.filter(c=>regionMatches(c, homeRegion)) : [];
+        const homeOwned = homePool.filter(c=>ownedKeys.has(dexKeyLoose(c)));
+        const homeUnknown = homePool.filter(c=>!ownedKeys.has(dexKeyLoose(c)));
+
+        let html = pickerHtml(homeRegion, regions);
+        html += `<div class="dexSectionTitle">🏠 Home Region: ${homeRegion ? esc(homeRegion) : "Not set"}</div>`;
+        if(!homeRegion){
+          html += `<div class="dexLoading">Choose a home region above or in your player profile. This will make DriverDex focus on cards from your local area.</div>`;
+        }else{
+          html += homeOwned.length ? homeOwned.map(c=>cardHtml(c,true)).join("") : `<div class="dexLoading">You have not collected any ${esc(homeRegion)} cards yet.</div>`;
+          html += `<div class="dexSectionTitle">Local ${esc(homeRegion)} cards not discovered by you yet</div>`;
+          html += homeUnknown.length ? homeUnknown.map(c=>cardHtml(c,false)).join("") : `<div class="dexLoading">No extra real ${esc(homeRegion)} cards found from other devices yet.</div>`;
+        }
+
+        const otherRegions = regions.filter(r=>norm(r)!==norm(homeRegion));
+        html += `<div class="dexSectionTitle">🌏 Other Regions</div>`;
+        if(!otherRegions.length){
+          html += `<div class="dexLoading">No other real regions have been published yet.</div>`;
+        }else{
+          otherRegions.forEach(region=>{
+            const pool = all.filter(c=>regionMatches(c, region));
+            const owned = pool.filter(c=>ownedKeys.has(dexKeyLoose(c)));
+            const unknown = pool.filter(c=>!ownedKeys.has(dexKeyLoose(c)));
+            html += `<div class="dexSectionTitle">${esc(region)} — ${owned.length}/${pool.length} discovered by you</div>`;
+            html += owned.map(c=>cardHtml(c,true)).join("");
+            html += unknown.slice(0,12).map(c=>cardHtml(c,false)).join("");
+          });
+        }
+        grid.innerHTML = html;
+
+        const sel = document.getElementById("driverDexHomeRegionSelect");
+        if(sel){
+          sel.addEventListener("change", function(){
+            setHomeRegion(this.value);
+            window.loadDriverDex();
+          });
+        }
+
+        const disc = document.getElementById("dexDiscoveredCount");
+        const shiny = document.getElementById("dexShinyCount");
+        const leg = document.getElementById("dexLegendaryCount");
+        const worldwide = document.getElementById("dexWorldwideCount");
+        const mini = document.getElementById("dexMiniStat");
+        if(disc) disc.textContent = `${localCards.length} your cards`;
+        if(shiny) shiny.textContent = `${localCards.filter(c=>c && c.shiny).length} shiny`;
+        if(leg) leg.textContent = `${localCards.filter(c=>{ const s=safeCalc(c).score||0; return s>=2500 || (c && c.manualRarity === "Legendary"); }).length} legendary`;
+        if(worldwide) worldwide.textContent = `${all.length} published`;
+        if(mini) mini.textContent = homeRegion ? `${homeRegion}: ${homeOwned.length}/${homePool.length} local cards discovered by you` : "Set home region";
+      };
+      if(typeof tradeDb === "undefined" || !tradeDb){ finish([]); return; }
+      tradeDb.ref("discoveredCards").once("value").then(snap=>{
+        finish(Object.values(snap.val() || {}));
+      }).catch(err=>{
+        console.log("DriverDex Firebase read failed", err);
+        finish([]);
+      });
+    });
+  };
+
+  const oldOpenDex = window.openDriverDex;
+  window.openDriverDex = function(){
+    if(typeof oldOpenDex === "function") oldOpenDex.apply(this, arguments);
+    const overlay = document.getElementById("driverDexOverlay");
+    if(overlay) overlay.style.display = "block";
+    setTimeout(window.loadDriverDex, 120);
+  };
+
+  // Add region to leaderboard player rows too.
+  const oldPublishStats = window.publishPlayerStats;
+  if(typeof oldPublishStats === "function"){
+    window.publishPlayerStats = function(){
+      return Promise.resolve(oldPublishStats()).then(row=>{
+        const region = getHomeRegion();
+        if(region && typeof tradeDb !== "undefined" && tradeDb){
+          const id = row && row.id ? row.id : (localStorage.getItem("drivermonDevicePlayerId") || "player");
+          return tradeDb.ref("trades/__leaderboardPlayers/" + String(id).replace(/[^a-zA-Z0-9_-]/g,"_")).update({homeRegion:region, region:region}).then(()=>Object.assign({}, row || {}, {homeRegion:region, region:region})).catch(()=>row);
+        }
+        return row;
+      });
+    };
+  }
+
+  window.addEventListener("load", function(){
+    ensureProfileRegionSelect();
+    const welcome = document.getElementById("welcomeRegionSelect");
+    if(welcome){
+      welcome.value = getHomeRegion();
+      welcome.addEventListener("change", function(){ setHomeRegion(this.value); });
+    }
+  });
+})();
+</script>
+
+<style>
+/* v172: compact home-region controls */
+.driverdexRegionPicker.v172Compact{
+  display:flex !important;
+  flex-direction:row !important;
+  align-items:center !important;
+  justify-content:space-between !important;
+  gap:8px !important;
+  flex-wrap:nowrap !important;
+  padding:9px 10px !important;
+}
+.driverdexRegionPicker.v172Compact .driverdexRegionLine{
+  white-space:nowrap !important;
+  overflow:hidden !important;
+  text-overflow:ellipsis !important;
+  font-size:13px !important;
+}
+.driverdexRegionPicker.v172Compact button{
+  padding:7px 9px !important;
+  font-size:11px !important;
+  border-radius:9px !important;
+  flex:0 0 auto !important;
+}
+.driverdexRegionPicker.v172Compact select{
+  min-width:150px !important;
+  max-width:190px !important;
+  padding:7px 8px !important;
+  font-size:12px !important;
+}
+.playerRegionRowV172{
+  display:flex !important;
+  align-items:center !important;
+  gap:8px !important;
+  margin:8px 0 10px !important;
+}
+.playerRegionRowV172 label{
+  margin:0 !important;
+  white-space:nowrap !important;
+  font-size:12px !important;
+  font-weight:900 !important;
+}
+.playerRegionRowV172 select{
+  flex:1 1 auto !important;
+  width:auto !important;
+  margin:0 !important;
+  padding:9px 10px !important;
+}
+@media(max-width:700px){
+  .driverdexRegionPicker.v172Compact{gap:6px !important;}
+  .driverdexRegionPicker.v172Compact .driverdexRegionLine{font-size:12px !important;}
+  .driverdexRegionPicker.v172Compact select{min-width:120px !important; max-width:145px !important;}
+}
+</style>
+
+<script>
+/* v172: DriverDex uses onboarding/profile home region automatically; compact change control only */
+(function(){
+  const REGION_OPTIONS = ["Brisbane","Gold Coast","Logan","Ipswich","Sunshine Coast","Toowoomba","Northern Rivers","Sydney","Melbourne","Adelaide","Perth","Darwin","Hobart","International"];
+  const PROFILE_KEY = "drivermon_player_profile_v1";
+  const PROFILE_KEYS = [PROFILE_KEY,"drivermonPlayerProfile"];
+  const REGION_KEYS = ["drivermon_user_region","drivermonUserRegion","drivermon_home_region"];
+
+  function esc(v){ return String(v ?? "").replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c])); }
+  function norm(v){ return String(v || "").toLowerCase().replace(/&/g,"and").replace(/[^a-z0-9]+/g," ").trim(); }
+  function prettyRegion(v){
+    const raw = String(v || "").trim();
+    if(!raw) return "";
+    const found = REGION_OPTIONS.find(r => norm(r) === norm(raw));
+    return found || raw.replace(/\s+/g," ").replace(/\b\w/g, m => m.toUpperCase());
+  }
+  function readProfile(){
+    try{ if(typeof getPlayerProfile === "function") return getPlayerProfile() || {}; }catch(e){}
+    for(const k of PROFILE_KEYS){
+      try{ const raw = localStorage.getItem(k); if(raw) return JSON.parse(raw) || {}; }catch(e){}
+    }
+    return {};
+  }
+  function saveRegionEverywhere(region){
+    const clean = prettyRegion(region);
+    if(!clean) return "";
+    REGION_KEYS.forEach(k=>{ try{ localStorage.setItem(k, clean); }catch(e){} });
+    PROFILE_KEYS.forEach(k=>{
+      try{
+        const existing = JSON.parse(localStorage.getItem(k) || "{}");
+        existing.homeRegion = clean;
+        existing.region = clean;
+        existing.updatedAt = new Date().toISOString();
+        localStorage.setItem(k, JSON.stringify(existing));
+      }catch(e){}
+    });
+    return clean;
+  }
+  function getHomeRegion(){
+    const p = readProfile();
+    const fromProfile = prettyRegion(p.homeRegion || p.region || p.userRegion || "");
+    if(fromProfile){ saveRegionEverywhere(fromProfile); return fromProfile; }
+    for(const k of REGION_KEYS){
+      try{ const v = localStorage.getItem(k); if(v) return prettyRegion(v); }catch(e){}
+    }
+    return "";
+  }
+  window.getUserRegion = getHomeRegion;
+  window.setUserRegion = saveRegionEverywhere;
+  window.getHomeRegion = getHomeRegion;
+  window.setHomeRegion = saveRegionEverywhere;
+
+  function wireWelcomeRegion(){
+    const select = document.getElementById("welcomeRegionSelect");
+    if(!select) return;
+    const current = getHomeRegion();
+    if(current) select.value = current;
+    select.onchange = function(){ saveRegionEverywhere(this.value); };
+    const closeBtn = document.getElementById("closeWelcomeBtn");
+    if(closeBtn && !closeBtn.dataset.v172RegionWired){
+      closeBtn.dataset.v172RegionWired = "1";
+      closeBtn.addEventListener("click", function(){
+        const selected = select.value || getHomeRegion();
+        if(selected) saveRegionEverywhere(selected);
+      });
+    }
+  }
+
+  function ensureProfileRegionSelectCompact(){
+    const modal = document.querySelector("#playerProfileOverlay .playerProfileModal") || document.querySelector(".playerProfileModal");
+    if(!modal) return;
+    let sel = document.getElementById("playerHomeRegionInput");
+    if(!sel){
+      const status = document.getElementById("playerProfileStatus");
+      const row = document.createElement("div");
+      row.className = "playerRegionRowV172";
+      row.innerHTML = `<label class="playerLabel" for="playerHomeRegionInput">Home region</label><select id="playerHomeRegionInput" class="playerRegionSelect"><option value="">Choose region</option>${REGION_OPTIONS.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join("")}</select>`;
+      if(status && status.parentNode) status.parentNode.insertBefore(row, status);
+      else modal.appendChild(row);
+      sel = document.getElementById("playerHomeRegionInput");
+    }else{
+      const oldWrap = sel.closest("div");
+      if(oldWrap && !oldWrap.classList.contains("playerRegionRowV172")) oldWrap.classList.add("playerRegionRowV172");
+    }
+    if(sel){
+      sel.value = getHomeRegion();
+      sel.onchange = function(){
+        saveRegionEverywhere(this.value);
+        try{ if(typeof publishPlayerStats === "function") publishPlayerStats(); }catch(e){}
+        try{ if(typeof loadDriverDex === "function") loadDriverDex(); }catch(e){}
+      };
+    }
+  }
+
+  const oldOpenProfileV172 = window.openPlayerProfileEditor;
+  window.openPlayerProfileEditor = function(){
+    if(typeof oldOpenProfileV172 === "function") oldOpenProfileV172.apply(this, arguments);
+    setTimeout(ensureProfileRegionSelectCompact, 80);
+  };
+
+  const oldSaveProfileV172 = window.savePlayerProfile;
+  window.savePlayerProfile = function(){
+    const beforeRegion = document.getElementById("playerHomeRegionInput")?.value || getHomeRegion();
+    if(beforeRegion) saveRegionEverywhere(beforeRegion);
+    if(typeof oldSaveProfileV172 === "function") oldSaveProfileV172.apply(this, arguments);
+    const afterRegion = beforeRegion || getHomeRegion();
+    if(afterRegion) saveRegionEverywhere(afterRegion);
+    try{ if(typeof publishPlayerStats === "function") publishPlayerStats(); }catch(e){}
+    try{ if(typeof loadDriverDex === "function") loadDriverDex(); }catch(e){}
+  };
+
+  function cardRegion(card){ return prettyRegion(card && (card.region || card.regionCaught || card.caughtRegion || card.homeRegion || card.location || card.area || "")); }
+  function calcSafe(card){ try{ return typeof calc === "function" ? calc(card) : {score:Number(card && (card.score || card.power) || 0), level:"?"}; }catch(e){ return {score:0, level:"?"}; } }
+  function raritySafe(score, manual){ try{ return typeof rarity === "function" ? rarity(score, manual) : (manual || "Common"); }catch(e){ return manual || "Common"; } }
+  function dexKey(card){
+    try{ if(typeof window.dexKey === "function") return window.dexKey(card); }catch(e){}
+    return norm((card && card.name || "") + " " + (card && (card.deliveries || card.uid || ""))).replace(/ /g,"_");
+  }
+  function cardImg(card){
+    if(!card) return "";
+    if(card.faceData || card.imageData || card.imgData) return card.faceData || card.imageData || card.imgData;
+    try{ if(typeof faceImages !== "undefined" && faceImages[card.img]) return faceImages[card.img]; }catch(e){}
+    if(card.img && String(card.img).startsWith("data:image")) return card.img;
+    return "";
+  }
+  function dexCardHtml(card, owned){
+    const c = calcSafe(card);
+    const r = raritySafe(c.score, card && card.manualRarity);
+    const img = owned ? cardImg(card) : "";
+    const region = cardRegion(card);
+    return `<div class="dexCard ${owned ? "" : "dexUndiscovered"} ${esc(r)}${card && card.shiny ? " shinyDex" : ""}">${img ? `<img src="${img}" alt="${esc(card.name || "DriverMon")}">` : `<div class="dexMysteryIcon">?</div>`}<div class="dexName">${owned && card && card.shiny ? "✨ " : ""}${owned ? esc(card && card.name ? card.name : "Unknown") : "Unknown Driver"}</div><div class="dexMeta">LVL ${esc(c.level || "?")}<br>${esc(r)}${region ? `<br><span class="dexRegionNote">${esc(region)}</span>` : ""}</div></div>`;
+  }
+  function mergeCards(localCards, globalCards){
+    const map = new Map();
+    (globalCards || []).forEach(c=>{ if(c && !c.demoUndiscovered && !String(c.uid || "").startsWith("demo_")){ const k=dexKey(c); if(k) map.set(k,c); } });
+    (localCards || []).forEach(c=>{ if(c && cardRegion(c)){ const k=dexKey(c); if(k) map.set(k,Object.assign({}, map.get(k)||{}, c)); } });
+    return Array.from(map.values()).filter(c=>cardRegion(c));
+  }
+  function uniqueRegions(cards, home){
+    const arr = Array.from(new Set((cards || []).map(cardRegion).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
+    if(home && !arr.some(r=>norm(r)===norm(home))) arr.unshift(home);
+    return arr;
+  }
+  function compactRegionBar(home, regions){
+    const opts = Array.from(new Set([...REGION_OPTIONS, ...regions])).filter(Boolean);
+    return `<div class="driverdexRegionPicker v172Compact"><span class="driverdexRegionLine">🏠 Home region: <b>${home ? esc(home) : "Not set"}</b></span><button type="button" id="driverDexChangeRegionBtn">Change</button><select id="driverDexHomeRegionSelect" style="display:none"><option value="">Choose region</option>${opts.map(r=>`<option value="${esc(r)}" ${norm(r)===norm(home)?"selected":""}>${esc(r)}</option>`).join("")}</select></div>`;
+  }
+  function publishOne(card){
+    if(typeof tradeDb === "undefined" || !tradeDb || !card || !cardRegion(card)) return Promise.resolve();
+    const key = dexKey(card) || ("card_" + Date.now());
+    let copy;
+    try{ copy = JSON.parse(JSON.stringify(card)); }catch(e){ copy = Object.assign({}, card); }
+    copy.dexKey = key;
+    copy.region = cardRegion(card);
+    copy.lastFoundAt = new Date().toISOString();
+    return tradeDb.ref("discoveredCards/" + key).transaction(existing => Object.assign({}, existing || {}, copy, {timesFound:Math.max(Number(existing && existing.timesFound || 0),0)+1,lastFoundAt:new Date().toISOString()})).catch(err=>console.log("DriverDex publish failed", err));
+  }
+  window.publishToDriverDex = publishOne;
+  window.publishCollectionToDriverDex = function(){
+    const cards = (typeof drivers !== "undefined" && Array.isArray(drivers)) ? drivers : [];
+    return Promise.all(cards.filter(c=>cardRegion(c)).map(publishOne));
+  };
+
+  window.loadDriverDex = function(){
+    const grid = document.getElementById("driverDexGrid");
+    if(!grid) return;
+    let home = getHomeRegion();
+    const localCards = (typeof drivers !== "undefined" && Array.isArray(drivers)) ? drivers.slice() : [];
+    const ownedKeys = new Set(localCards.map(dexKey));
+    grid.innerHTML = `<div class="dexLoading">Loading regional DriverDex...</div>`;
+    window.publishCollectionToDriverDex().finally(()=>{
+      const finish = globalCards => {
+        const all = mergeCards(localCards, globalCards || []);
+        const fallback = localCards.map(cardRegion).find(Boolean);
+        if(!home && fallback) home = saveRegionEverywhere(fallback);
+        const regions = uniqueRegions(all, home);
+        const homeRegion = home || "";
+        const homePool = homeRegion ? all.filter(c=>norm(cardRegion(c))===norm(homeRegion)) : [];
+        const homeOwned = homePool.filter(c=>ownedKeys.has(dexKey(c)));
+        const homeUnknown = homePool.filter(c=>!ownedKeys.has(dexKey(c)));
+        let html = compactRegionBar(homeRegion, regions);
+        html += `<div class="dexSectionTitle">🏠 Home Region: ${homeRegion ? esc(homeRegion) : "Not set"}</div>`;
+        if(!homeRegion){
+          html += `<div class="dexLoading">Choose your home region in your starter popup or use Change above. This makes DriverDex focus on cards from your local area.</div>`;
+        }else{
+          html += `<div class="dexLoading">${homeOwned.length}/${homePool.length} ${esc(homeRegion)} cards discovered by you.</div>`;
+          html += homeOwned.length ? homeOwned.map(c=>dexCardHtml(c,true)).join("") : `<div class="dexLoading">You have not collected any ${esc(homeRegion)} cards yet.</div>`;
+          html += `<div class="dexSectionTitle">Local ${esc(homeRegion)} cards not discovered by you yet</div>`;
+          html += homeUnknown.length ? homeUnknown.map(c=>dexCardHtml(c,false)).join("") : `<div class="dexLoading">No extra real ${esc(homeRegion)} cards found from other devices yet.</div>`;
+        }
+        html += `<div class="dexSectionTitle">🌏 Other Regions</div>`;
+        const otherRegions = regions.filter(r=>norm(r)!==norm(homeRegion));
+        if(!otherRegions.length){
+          html += `<div class="dexLoading">No other real regions have been published yet.</div>`;
+        }else{
+          otherRegions.forEach(region=>{
+            const pool = all.filter(c=>norm(cardRegion(c))===norm(region));
+            const owned = pool.filter(c=>ownedKeys.has(dexKey(c)));
+            const unknown = pool.filter(c=>!ownedKeys.has(dexKey(c)));
+            html += `<div class="dexSectionTitle">${esc(region)} — ${owned.length}/${pool.length} discovered by you</div>`;
+            html += owned.map(c=>dexCardHtml(c,true)).join("");
+            html += unknown.slice(0,12).map(c=>dexCardHtml(c,false)).join("");
+          });
+        }
+        grid.innerHTML = html;
+        const changeBtn = document.getElementById("driverDexChangeRegionBtn");
+        const sel = document.getElementById("driverDexHomeRegionSelect");
+        if(changeBtn && sel){
+          changeBtn.onclick = function(){ sel.style.display = sel.style.display === "none" ? "block" : "none"; };
+          sel.onchange = function(){ saveRegionEverywhere(this.value); window.loadDriverDex(); try{ if(typeof publishPlayerStats === "function") publishPlayerStats(); }catch(e){} };
+        }
+        const disc = document.getElementById("dexDiscoveredCount");
+        const shiny = document.getElementById("dexShinyCount");
+        const leg = document.getElementById("dexLegendaryCount");
+        const worldwide = document.getElementById("dexWorldwideCount");
+        const mini = document.getElementById("dexMiniStat");
+        if(disc) disc.textContent = `${localCards.length} your cards`;
+        if(shiny) shiny.textContent = `${localCards.filter(c=>c && c.shiny).length} shiny`;
+        if(leg) leg.textContent = `${localCards.filter(c=>{ const s=calcSafe(c).score||0; return s>=2500 || (c && c.manualRarity === "Legendary"); }).length} legendary`;
+        if(worldwide) worldwide.textContent = `${all.length} published`;
+        if(mini) mini.textContent = homeRegion ? `${homeRegion}: ${homeOwned.length}/${homePool.length} local cards discovered by you` : "Set home region";
+      };
+      if(typeof tradeDb === "undefined" || !tradeDb){ finish([]); return; }
+      tradeDb.ref("discoveredCards").once("value").then(snap=>finish(Object.values(snap.val() || {}))).catch(err=>{ console.log("DriverDex Firebase read failed", err); finish([]); });
+    });
+  };
+
+  const oldOpenDexV172 = window.openDriverDex;
+  window.openDriverDex = function(){
+    if(typeof oldOpenDexV172 === "function") oldOpenDexV172.apply(this, arguments);
+    const overlay = document.getElementById("driverDexOverlay");
+    if(overlay) overlay.style.display = "block";
+    setTimeout(window.loadDriverDex, 140);
+  };
+
+  window.addEventListener("load", function(){
+    wireWelcomeRegion();
+    ensureProfileRegionSelectCompact();
+    setTimeout(()=>{ try{ if(getHomeRegion() && typeof publishPlayerStats === "function") publishPlayerStats(); }catch(e){} }, 1000);
+  });
 })();
 </script>
