@@ -7256,6 +7256,48 @@ window.addEventListener("DOMContentLoaded", function(){
 })();
 </script>
 
+
+
+<!-- v194 fresh: mobile full-width battle button only. No Firebase/battle logic changes. -->
+<style id="v194MobileBattleButtonFix">
+@media (max-width: 700px){
+  .leaderEntry{
+    display:grid !important;
+    grid-template-columns:44px 56px 1fr !important;
+    gap:8px !important;
+    align-items:center !important;
+    overflow:hidden !important;
+  }
+  .leaderEntry .leaderMain{
+    min-width:0 !important;
+  }
+  .leaderEntry .leaderScore{
+    grid-column:1 / -1 !important;
+    width:100% !important;
+    margin:4px 0 0 0 !important;
+  }
+  .leaderEntry .v185BattleBtn,
+  .leaderEntry .v186BattleBtn,
+  .leaderEntry .v192BattleBtn,
+  .leaderEntry button[data-battle-id]{
+    grid-column:1 / -1 !important;
+    display:block !important;
+    width:100% !important;
+    max-width:100% !important;
+    box-sizing:border-box !important;
+    margin:8px 0 0 0 !important;
+    padding:12px 10px !important;
+    min-height:46px !important;
+    font-size:15px !important;
+    line-height:1.1 !important;
+    border-radius:12px !important;
+    white-space:normal !important;
+    overflow:hidden !important;
+    text-overflow:ellipsis !important;
+  }
+}
+</style>
+
 </body>
 </html>
 
