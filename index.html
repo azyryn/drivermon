@@ -6989,6 +6989,137 @@ window.addEventListener("DOMContentLoaded", function(){
 })();
 </script>
 
+
+
+
+<!-- removed duplicate old modifier injector -->
+
+
+
+
+<!-- v186: cleanup duplicate leaderboard/modifier display + show card XP on cards -->
+<script>
+(function(){
+  const LB_PATH = "trades/__leaderboardPlayers";
+  const PLAYER_ID_KEYS = ["drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId"];
+  const CARD_STATS_KEY = "drivermonBattleCardStats_v185";
+  const RATING_KEY = "drivermonBattleRating_v185";
+
+  function esc(s){ return String(s == null ? "" : s).replace(/[&<>\"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
+  function safe(s){ return String(s || "player").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90) || "player"; }
+  function norm(s){ return String(s||"").trim().toLowerCase(); }
+  function num(v,f){ v=Number(v); return Number.isFinite(v)?v:(f||0); }
+  function getId(){ for(const k of PLAYER_ID_KEYS){ try{ const v=localStorage.getItem(k); if(v) return safe(v); }catch(e){} } return ""; }
+  function getRating(){ try{ return num(localStorage.getItem(RATING_KEY),1000) || 1000; }catch(e){ return 1000; } }
+  function getStats(){ try{ return JSON.parse(localStorage.getItem(CARD_STATS_KEY)||"{}"); }catch(e){ return {}; } }
+  function xpNeeded(level){ return 50 + (num(level,1) * 25); }
+  function getProfile(){ try{ if(typeof getPlayerProfile === "function"){ const p=getPlayerProfile(); if(p&&typeof p==="object") return p; } }catch(e){} for(const k of ["driverMonPlayerProfile","playerProfile","drivermonProfile","drivermon_player_profile"]){ try{ const raw=localStorage.getItem(k); if(raw){ const p=JSON.parse(raw); if(p&&typeof p==="object") return p; } }catch(e){} } return {}; }
+  function getName(){ const p=getProfile(); return String(p.username||p.name||p.playerName||p.displayName||"Player").trim() || "Player"; }
+  function getIcon(){ const p=getProfile(); for(const x of [p.avatar,p.avatarData,p.icon,p.profilePic,p.profileImage,p.image,p.photo]) if(String(x||"").startsWith("data:image")) return String(x); try{ if(typeof playerIconData !== "undefined" && String(playerIconData||"").startsWith("data:image")) return playerIconData; }catch(e){} return ""; }
+  function getHomeRegion(){ const p=getProfile(); let r=p.homeRegion||p.region||p.userRegion||""; try{ if(!r && typeof window.getHomeRegion === "function") r=window.getHomeRegion(); }catch(e){} try{ if(!r) r=localStorage.getItem("drivermonHomeRegion")||localStorage.getItem("homeRegion")||localStorage.getItem("playerRegion")||""; }catch(e){} return String(r||"").trim(); }
+
+  function calcCard(d){ try{ if(typeof calc === "function") return calc(d)||{}; }catch(e){} return {}; }
+  function typeFor(d,c){ try{ if(typeof driverType === "function") return driverType(d,c)||{}; }catch(e){} return {name:d.type||d.element||""}; }
+  function regionFor(d){ try{ if(typeof latestRegionForDriver === "function"){ const r=latestRegionForDriver(d); if(r&&r.region) return r.region; } }catch(e){} return d.region||d.homeRegion||d.area||""; }
+  function baseName(d){ return String((d&&(d.name||d.driverName||d.title))||"Unnamed Driver").trim(); }
+  function cardKeyFromDriver(d){ const c=calcCard(d), t=typeFor(d,c); return safe(d.uid || d.id || d.cardId || (norm(baseName(d))+"_"+norm(regionFor(d))+"_"+norm(t.name||d.type||""))); }
+  function rarityFor(d,c){ try{ if(typeof rarity === "function") return rarity(num(c.score,0), d.manualRarity); }catch(e){} return d.manualRarity||d.rarity||"Bronze"; }
+
+  function ensureCss(){
+    if(document.getElementById("v186Css")) return;
+    const st=document.createElement("style"); st.id="v186Css"; st.textContent=`
+      .v186XPBox{margin-top:8px;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.22);border-radius:12px;padding:7px 8px;font-size:10px;font-weight:900;line-height:1.2;}
+      .v186XPTop{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:5px;color:#ffdf38;}
+      .v186XPBar{height:8px;background:rgba(255,255,255,.18);border-radius:999px;overflow:hidden;border:1px solid rgba(255,255,255,.2)}
+      .v186XPFill{height:100%;background:linear-gradient(90deg,#34db75,#ffdf38);border-radius:999px;}
+      .v186XPStats{display:flex;justify-content:space-between;gap:6px;margin-top:5px;opacity:.92;}
+      .v186Promo{margin-top:5px;background:linear-gradient(180deg,#ffdf38,#ff8a00);color:#111;border-radius:999px;padding:4px 7px;text-align:center;font-weight:1000;}
+      .v186Mod{background:linear-gradient(135deg,rgba(255,210,46,.95),rgba(255,138,0,.9));color:#111;border:4px solid white;border-radius:20px;padding:14px 16px;margin:0 0 14px 0;box-shadow:0 8px 0 rgba(0,0,0,.28);display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:center;}
+      .v186ModIcon{font-size:42px;line-height:1}.v186Kicker{font-size:12px;font-weight:1000;text-transform:uppercase;letter-spacing:.8px;color:#061a3a}.v186ModName{font-size:25px;font-weight:1000;line-height:1;color:#061a3a}.v186Pills{margin-top:7px;display:flex;flex-wrap:wrap;gap:7px}.v186Pill{background:rgba(255,255,255,.72);border:1px solid rgba(0,0,0,.12);border-radius:999px;padding:6px 9px;font-size:12px;font-weight:1000;line-height:1.15}.v186BattleBtn{padding:9px 10px!important;border-radius:10px!important;margin-right:8px!important;background:linear-gradient(180deg,#ff4ddb,#8a12c7)!important;color:white!important;box-shadow:0 3px 0 rgba(0,0,0,.28)!important;font-size:12px!important;}
+      @media(max-width:700px){.v186Mod{grid-template-columns:1fr;text-align:center}.v186Pills{justify-content:center}.v186BattleBtn{width:100%;margin:8px 0!important}}
+    `; document.head.appendChild(st);
+  }
+
+  function xpHtml(d){
+    const stats=getStats(); const c=calcCard(d); const key=cardKeyFromDriver(d); const st=stats[key]||{};
+    const baseLevel=num(c.level || d.level || d.nameRank,1); const bonusLevel=num(st.bonusLevel,0); const shownLevel=baseLevel+bonusLevel;
+    const xp=num(st.xp,0); const needed=xpNeeded(shownLevel); const pct=Math.max(0,Math.min(100, needed?Math.round((xp/needed)*100):0));
+    const career=num(st.careerXP,0), battles=num(st.battles,0), wins=num(st.wins,0), bonusPower=num(st.bonusPower,0);
+    if(!career && !battles && !wins && !xp && !bonusPower) return `<div class="v186XPBox"><div class="v186XPTop"><span>⚔ Career XP</span><span>0 / ${needed}</span></div><div class="v186XPBar"><div class="v186XPFill" style="width:0%"></div></div><div class="v186XPStats"><span>Battles 0</span><span>Wins 0</span><span>+0 Power</span></div></div>`;
+    return `<div class="v186XPBox"><div class="v186XPTop"><span>⚔ Career XP</span><span>${xp} / ${needed}</span></div><div class="v186XPBar"><div class="v186XPFill" style="width:${pct}%"></div></div><div class="v186XPStats"><span>Battles ${battles}</span><span>Wins ${wins}</span><span>+${bonusPower} Power</span></div>${st.promotionAvailable?`<div class="v186Promo">⭐ Promotion available</div>`:""}</div>`;
+  }
+
+  // Show XP directly on main cards, just above Power.
+  const oldCard = window.card;
+  if(typeof oldCard === "function" && !oldCard.__v186Wrapped){
+    const wrapped=function(d){
+      let html=oldCard.apply(this,arguments);
+      if(String(html).includes("v186XPBox")) return html;
+      return String(html).replace('<div class="power">', xpHtml(d) + '<div class="power">');
+    };
+    wrapped.__v186Wrapped=true;
+    window.card=wrapped;
+  }
+  const oldRenderCards=window.renderCards;
+  if(typeof oldRenderCards === "function" && !oldRenderCards.__v186Wrapped){
+    const rr=function(){ ensureCss(); return oldRenderCards.apply(this,arguments); };
+    rr.__v186Wrapped=true; window.renderCards=rr;
+  }
+
+  function localCards(){
+    let arr=[]; try{ if(Array.isArray(window.drivers)) arr=window.drivers; }catch(e){} try{ if(!arr.length && Array.isArray(drivers)) arr=drivers; }catch(e){}
+    return (arr||[]).filter(Boolean).map(d=>{ const c=calcCard(d); const t=typeFor(d,c); const key=cardKeyFromDriver(d); const st=getStats()[key]||{}; return {uid:key,name:baseName(d),region:regionFor(d),rarity:rarityFor(d,c),level:num(c.level||d.level||1,1)+num(st.bonusLevel,0),power:num(c.score||d.score||d.power,0)+num(st.bonusPower,0),type:t.name||d.type||"",typeIcon:t.icon||"",shiny:!!d.shiny,face:(function(){try{ if(typeof faceImages!=="undefined"&&d.img!=null&&faceImages[d.img]) return faceImages[d.img]; }catch(e){} return d.face||d.image||"";})(),battleXP:num(st.xp,0),careerXP:num(st.careerXP,0),battleWins:num(st.wins,0),battleCount:num(st.battles,0)}; });
+  }
+  function myRow(){ const cards=localCards(); const regions=new Set(cards.map(c=>c.region).filter(Boolean)); const shinies=cards.filter(c=>c.shiny).length; return {id:getId()||safe(getName()),name:getName(),icon:getIcon(),homeRegion:getHomeRegion(),battleRating:getRating(),stats:{cards:cards.length,regions:regions.size,shinies:shinies,power:cards.reduce((a,c)=>a+num(c.power,0),0)},publicCollection:cards.slice(0,240),updatedAt:Date.now(),battleSystem:"v186"}; }
+  function publish(){ if(typeof tradeDb==="undefined"||!tradeDb) return Promise.resolve(myRow()); const row=myRow(); return tradeDb.ref(LB_PATH+"/"+safe(row.id)).update(row).then(()=>row).catch(()=>row); }
+  function readRows(){ if(typeof tradeDb==="undefined"||!tradeDb) return Promise.resolve([myRow()]); return tradeDb.ref(LB_PATH).once("value").then(s=>Object.keys(s.val()||{}).map(k=>Object.assign({id:k},s.val()[k]||{}))).catch(()=>[myRow()]); }
+  function dedupeRows(rows){
+    const mine=safe(getId()); const map=new Map();
+    (rows||[]).concat([myRow()]).forEach(r=>{
+      if(!r) return; const id=safe(r.id||""); const name=norm(r.name||r.username||"");
+      const key = id===mine ? "__ME__" : (name ? "name:"+name : "id:"+id);
+      const score=(id===mine?1e15:0)+num(r.updatedAt,0)+num(r.stats&&r.stats.cards,Array.isArray(r.publicCollection)?r.publicCollection.length:0)*1000+num(r.battleRating,1000);
+      const existing=map.get(key); if(!existing || score>existing.__score) map.set(key,Object.assign({},r,{id:id||safe(name||"player"),__score:score}));
+    });
+    return Array.from(map.values()).map(r=>{delete r.__score; return r;});
+  }
+  function todayKey(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+  function hash(s){ let h=0; for(let i=0;i<s.length;i++){ h=((h<<5)-h)+s.charCodeAt(i); h|=0; } return Math.abs(h); }
+  function uniq(a){ return Array.from(new Set((a||[]).map(x=>String(x||"").trim()).filter(Boolean))); }
+  function buildModifier(rows){
+    let regions=[], types=[]; (rows||[]).forEach(r=>{ if(r.homeRegion) regions.push(r.homeRegion); (r.publicCollection||[]).forEach(c=>{ if(c.region) regions.push(c.region); if(c.type) types.push(c.type); }); });
+    localCards().forEach(c=>{ if(c.region) regions.push(c.region); if(c.type) types.push(c.type); }); regions=uniq(regions); types=uniq(types);
+    const seed=hash("dm-v186-"+todayKey()); const region=regions[seed%Math.max(1,regions.length)]||"Home Region"; const type=types[(seed+7)%Math.max(1,types.length)]||"Lightning";
+    const mods=[
+      {icon:"🟢",name:"ROOKIE SHIFT",lines:["Level 1–10 drivers get +50%","Level 11–20 drivers get +25%"]},
+      {icon:"🚧",name:"ROADWORKS",lines:["Bronze drivers get +50%",`${region} drivers get +25%`]},
+      {icon:"🏠",name:"LOCAL HERO",lines:["Home-region drivers get +40%",`${region} drivers get +20%`]},
+      {icon:"⚡",name:"TYPE SURGE",lines:[`${type} drivers get +40%`,"Mixed teams get a small bonus"]},
+      {icon:"💪",name:"UNDERDOG DAY",lines:["Cards under 1000 power get +50%","Cards under 1500 power get +25%"]},
+      {icon:"✨",name:"FLASHY SHIFT",lines:["Shiny drivers get +25%","Non-shiny drivers still get +10%"]},
+      {icon:"🚦",name:"TRAFFIC CHAOS",lines:["All cards get a random traffic roll","Lower-power cards get a small chance to upset"]}
+    ];
+    return mods[seed%mods.length];
+  }
+  function modifierHtml(m){ return `<div class="v186Mod" id="v186OnlyModifier"><div class="v186ModIcon">${esc(m.icon)}</div><div><div class="v186Kicker">Today&apos;s Battle Modifier</div><div class="v186ModName">${esc(m.name)}</div><div class="v186Pills">${(m.lines||[]).map(x=>`<span class="v186Pill">${esc(x)}</span>`).join("")}</div></div></div>`; }
+  function renderLeaderboard(rows, metric){
+    ensureCss(); const content=document.getElementById("leaderboardContent"); if(!content) return;
+    const clean=dedupeRows(rows); const mod=buildModifier(clean); const myId=safe(getId());
+    metric=metric||"battleRating"; const label=metric==="cards"?"Cards":metric==="regions"?"Regions":metric==="shinies"?"Shinies":metric==="power"?"Power":"Battle Rating";
+    function value(r){ if(metric==="cards") return num(r.stats&&r.stats.cards,Array.isArray(r.publicCollection)?r.publicCollection.length:0); if(metric==="regions") return num(r.stats&&r.stats.regions,0); if(metric==="shinies") return num(r.stats&&r.stats.shinies,0); if(metric==="power") return num(r.stats&&r.stats.power,0); return num(r.battleRating,1000); }
+    clean.sort((a,b)=>value(b)-value(a));
+    content.innerHTML=modifierHtml(mod)+(clean.length?clean.map((r,i)=>{ const id=safe(r.id); const name=esc(r.name||r.username||"Player"); const icon=esc(r.icon||r.avatar||getIcon()); const cards=num(r.stats&&r.stats.cards,Array.isArray(r.publicCollection)?r.publicCollection.length:0); const home=esc(r.homeRegion||r.region||""); const rating=num(r.battleRating,1000); const isMe=id===myId; return `<div class="leaderEntry ${i===0?'goldLeader':i===1?'silverLeader':i===2?'bronzeLeader':''}"><div class="leaderRank">#${i+1}</div><img class="leaderAvatarClickV182" data-player-id="${esc(id)}" src="${icon}" alt="${name}" title="Tap to view ${name}'s cards" style="width:52px;height:52px;border-radius:50%;object-fit:cover;border:3px solid white;margin-right:8px;cursor:pointer;background:#10234e;"><div class="leaderMain"><div class="leaderName">${name}${isMe?' <span style="font-size:11px;color:#ffdf38;">YOU</span>':''}</div><div class="leaderMeta">${home?`Home: ${home} • `:""}${cards} public cards • Battle Rating ${rating}<br><span style="color:#ffdf38;font-weight:1000;">Tap picture to view cards</span></div></div><button class="v186BattleBtn" data-battle-id="${esc(id)}" ${isMe?'disabled style="opacity:.45;"':''}>⚔ Battle</button><div class="leaderScore"><div class="leaderScoreValue">${Number(value(r)).toLocaleString()}</div><div class="leaderScoreLabel">${esc(label)}</div></div></div>`; }).join(""):`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">No players yet</div><div class="leaderMeta">No public Firebase players were found.</div></div></div>`);
+  }
+  function show(metric){ window.currentLeaderboardTab=metric||window.currentLeaderboardTab||"battleRating"; ensureCss(); const content=document.getElementById("leaderboardContent"); if(content) content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Loading leaderboard...</div><div class="leaderMeta">Removing duplicates and showing one modifier panel.</div></div></div>`; publish().finally(()=>readRows().then(rows=>renderLeaderboard(rows,window.currentLeaderboardTab))); }
+
+  // Final override: this runs after older leaderboard versions and prevents duplicate modifier panels/player rows.
+  window.showLeaderboardTab=show;
+  window.openLeaderboard=function(){ ensureCss(); const overlay=document.getElementById("leaderboardOverlay"); if(overlay) overlay.style.display="block"; show(window.currentLeaderboardTab||"battleRating"); };
+  document.addEventListener("click",function(e){ const b=e.target&&e.target.closest?e.target.closest(".v186BattleBtn"):null; if(b&&b.dataset&&b.dataset.battleId){ e.preventDefault(); e.stopPropagation(); if(!b.disabled && typeof window.startDriverMonBattle==="function") window.startDriverMonBattle(b.dataset.battleId); } }, true);
+  window.addEventListener("load",function(){ ensureCss(); setTimeout(()=>{ try{ if(typeof window.renderCards==="function") window.renderCards(); }catch(e){} publish(); },900); });
+})();
+</script>
+
 </body>
 </html>
 
@@ -8818,5 +8949,294 @@ img[alt="DriverDex"]{
   document.addEventListener("click",function(e){ const a=e.target&&e.target.closest?e.target.closest(".leaderAvatarClickV182,.leaderAvatarClickV178,.leaderAvatarClickV177,.leaderAvatarClickV176,.leaderAvatarClickV175"):null; if(a&&a.dataset&&a.dataset.playerId){ e.preventDefault(); e.stopPropagation(); viewPlayer(a.dataset.playerId); }},true);
   const oldSave=window.saveCollection; if(typeof oldSave==="function") window.saveCollection=function(){ const r=oldSave.apply(this,arguments); setTimeout(publish,200); return r; };
   window.addEventListener("load",function(){ ensureCss(); setTimeout(publish,700); setTimeout(publish,2200); });
+})();
+</script>
+
+
+<!-- removed duplicate old modifier injector -->
+
+
+<!-- v185: Leaderboard Battle System Phase 1 - hidden auto teams, daily modifiers, XP, rating, promotion-ready stats. -->
+<script>
+(function(){
+  const LB_PATH = "trades/__leaderboardPlayers";
+  const PLAYER_ID_KEY = "drivermonPlayerId_v178";
+  const CARD_STATS_KEY = "drivermonBattleCardStats_v185";
+  const RATING_KEY = "drivermonBattleRating_v185";
+  const PROFILE_KEYS = ["driverMonPlayerProfile","playerProfile","drivermonProfile","drivermon_player_profile"];
+  const RARITY_ORDER = ["Bronze","Silver","Gold","Platinum","Diamond","Final"];
+
+  function esc(s){ return String(s == null ? "" : s).replace(/[&<>\"']/g, m => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m])); }
+  function safe(s){ return String(s || "player").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90) || "player"; }
+  function norm(s){ return String(s || "").trim().toLowerCase(); }
+  function number(v, fallback){ v = Number(v); return Number.isFinite(v) ? v : (fallback || 0); }
+  function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+
+  function getProfile(){
+    try{ if(typeof getPlayerProfile === "function"){ const p=getPlayerProfile(); if(p&&typeof p==="object") return p; } }catch(e){}
+    for(const k of PROFILE_KEYS){ try{ const raw=localStorage.getItem(k); if(raw){ const p=JSON.parse(raw); if(p&&typeof p==="object") return p; } }catch(e){} }
+    return {};
+  }
+  function getName(){ const p=getProfile(); return String(p.username || p.name || p.playerName || p.displayName || "Player").trim() || "Player"; }
+  function getIcon(){
+    const p=getProfile();
+    for(const x of [p.avatar,p.avatarData,p.icon,p.profilePic,p.profileImage,p.image,p.photo]) if(String(x||"").startsWith("data:image")) return String(x);
+    try{ if(typeof playerIconData !== "undefined" && String(playerIconData||"").startsWith("data:image")) return playerIconData; }catch(e){}
+    try{ if(typeof defaultIconSafe === "function") return defaultIconSafe(); }catch(e){}
+    return "";
+  }
+  function getHomeRegion(){
+    const p=getProfile(); let r=p.homeRegion || p.region || p.userRegion || "";
+    try{ if(!r && typeof window.getHomeRegion === "function") r=window.getHomeRegion(); }catch(e){}
+    try{ if(!r) r=localStorage.getItem("drivermonHomeRegion") || localStorage.getItem("homeRegion") || localStorage.getItem("playerRegion") || ""; }catch(e){}
+    return String(r||"").trim();
+  }
+  function getId(){
+    let id=""; try{ id=localStorage.getItem(PLAYER_ID_KEY) || localStorage.getItem("drivermonPlayerId_v177") || localStorage.getItem("drivermonPlayerId") || localStorage.getItem("playerId") || ""; }catch(e){}
+    if(!id) id="dm_"+Math.random().toString(36).slice(2,10)+"_"+Date.now().toString(36);
+    id=safe(id); try{ localStorage.setItem(PLAYER_ID_KEY,id); localStorage.setItem("drivermonPlayerId",id); localStorage.setItem("drivermonPlayerId_v177",id); }catch(e){}
+    return id;
+  }
+  function getRating(){ try{ return number(localStorage.getItem(RATING_KEY), 1000) || 1000; }catch(e){ return 1000; } }
+  function setRating(v){ v=Math.round(clamp(number(v,1000), 100, 9999)); try{ localStorage.setItem(RATING_KEY, String(v)); }catch(e){} return v; }
+
+  function getBattleStats(){ try{ return JSON.parse(localStorage.getItem(CARD_STATS_KEY)||"{}"); }catch(e){ return {}; } }
+  function setBattleStats(s){ try{ localStorage.setItem(CARD_STATS_KEY, JSON.stringify(s||{})); }catch(e){} }
+  function cardKey(c){ return safe(c.uid || c.id || c.cardId || (norm(c.name||c.driverName||"card") + "_" + norm(c.region||"") + "_" + norm(c.type||""))); }
+
+  function localDrivers(){ try{ if(Array.isArray(window.drivers)) return window.drivers.filter(Boolean); }catch(e){} try{ if(typeof drivers !== "undefined" && Array.isArray(drivers)) return drivers.filter(Boolean); }catch(e){} return []; }
+  function localFace(d){
+    try{ if(typeof faceImages !== "undefined" && Array.isArray(faceImages) && d && d.img != null && faceImages[d.img]) return faceImages[d.img]; }catch(e){}
+    try{ if(window.faceImages && Array.isArray(window.faceImages) && d && d.img != null && window.faceImages[d.img]) return window.faceImages[d.img]; }catch(e){}
+    for(const k of ["image","imgData","imgSrc","photo","face","faceImage","imageData","src"]){ if(String(d && d[k] || "").startsWith("data:image")) return String(d[k]); }
+    return "";
+  }
+  function calcCard(d){ try{ if(typeof calc === "function") return calc(d) || {}; }catch(e){} try{ if(typeof calcSafe === "function") return calcSafe(d) || {}; }catch(e){} return {}; }
+  function rarityFor(d,c){ try{ if(typeof rarity === "function") return rarity(Number(c.score||0), d.manualRarity); }catch(e){} return d.manualRarity || d.rarity || d.rank || "Bronze"; }
+  function typeFor(d,c){ try{ if(typeof driverType === "function") return driverType(d,c) || {}; }catch(e){} return {name:d.type || d.element || "Type", icon:d.typeIcon || ""}; }
+  function regionFor(d){ try{ if(typeof latestRegionForDriver === "function"){ const rr=latestRegionForDriver(d); if(rr && rr.region) return rr.region; } }catch(e){} return d.region || d.homeRegion || d.area || d.location || "Unknown"; }
+  function baseName(d){ return String(d && (d.name || d.driverName || d.title) || "Unnamed Driver").trim(); }
+
+  function hydrateLocalCard(d){
+    const c = calcCard(d); const t = typeFor(d,c); const stats = getBattleStats();
+    const raw = {
+      uid: d.uid || d.id || d.cardId || (norm(baseName(d))+"_"+norm(regionFor(d))+"_"+Math.random().toString(36).slice(2,6)),
+      name: baseName(d),
+      region: regionFor(d),
+      rarity: rarityFor(d,c),
+      level: number(c.level || d.level || d.nameRank || d.rankLevel, 1),
+      power: number(c.score || d.score || d.power || d.powerScore, 0),
+      type: t.name || d.type || d.element || "Type",
+      typeIcon: t.icon || d.typeIcon || "",
+      shiny: !!d.shiny,
+      face: localFace(d)
+    };
+    const key = cardKey(raw); const st = stats[key] || {};
+    raw.uid = key;
+    raw.battleXP = number(st.xp,0);
+    raw.careerXP = number(st.careerXP,0);
+    raw.battleWins = number(st.wins,0);
+    raw.battleCount = number(st.battles,0);
+    raw.bonusPower = number(st.bonusPower,0);
+    raw.bonusLevel = number(st.bonusLevel,0);
+    raw.power = Math.round(raw.power + raw.bonusPower);
+    raw.level = Math.round(raw.level + raw.bonusLevel);
+    raw.promotionAvailable = !!st.promotionAvailable;
+    return raw;
+  }
+  function getLocalCards(){ return localDrivers().map(hydrateLocalCard).filter(c=>c.name && c.power>0); }
+  function hydratePublicCard(c){
+    c = Object.assign({}, c||{});
+    c.uid = cardKey(c);
+    c.name = c.name || c.driverName || "Unnamed Driver";
+    c.region = c.region || c.homeRegion || c.area || "Unknown";
+    c.rarity = c.rarity || c.manualRarity || c.rank || "Bronze";
+    c.level = number(c.level, 1);
+    c.power = number(c.power || c.score, 0);
+    c.type = c.type || c.element || "Type";
+    c.typeIcon = c.typeIcon || "";
+    c.face = String(c.face || c.image || c.photo || "");
+    c.shiny = !!c.shiny;
+    c.battleXP = number(c.battleXP,0); c.careerXP=number(c.careerXP,0); c.battleWins=number(c.battleWins,0); c.battleCount=number(c.battleCount,0);
+    return c;
+  }
+
+  function allPublicRows(val){ return Object.keys(val||{}).map(k => Object.assign({id:k}, val[k]||{})).filter(Boolean); }
+  function myRow(){
+    const cards = getLocalCards(); const regions = new Set(cards.map(c=>c.region).filter(Boolean)); const shinies = cards.filter(c=>c.shiny).length;
+    return { id:getId(), name:getName(), icon:getIcon(), homeRegion:getHomeRegion(), battleRating:getRating(), stats:{cards:cards.length, regions:regions.size, shinies:shinies, power:cards.reduce((a,c)=>a+number(c.power),0)}, publicCollection: cards.slice(0,240), updatedAt: Date.now(), battleSystem:"v185" };
+  }
+  function publish(){
+    if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve();
+    const row = myRow();
+    return tradeDb.ref(LB_PATH + "/" + safe(row.id)).update(row).catch(e=>console.warn("v185 publish failed", e));
+  }
+  function readRows(){
+    if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve([myRow()]);
+    return tradeDb.ref(LB_PATH).once("value").then(s=>{ const rows=allPublicRows(s.val()); const mine=myRow(); if(!rows.find(r=>safe(r.id)===safe(mine.id))) rows.push(mine); return rows; }).catch(()=>[myRow()]);
+  }
+
+  function todayKey(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+  function hash(str){ let h=0; for(let i=0;i<str.length;i++){ h=((h<<5)-h)+str.charCodeAt(i); h|=0; } return Math.abs(h); }
+  function unique(arr){ return Array.from(new Set(arr.map(x=>String(x||"").trim()).filter(Boolean))); }
+  function poolsFrom(rows){
+    let regions=[], types=[], rarities=[];
+    (rows||[]).forEach(r=>{ if(r.homeRegion) regions.push(r.homeRegion); (r.publicCollection||[]).forEach(c=>{ if(c.region) regions.push(c.region); if(c.type) types.push(c.type); if(c.rarity) rarities.push(c.rarity); }); });
+    getLocalCards().forEach(c=>{ if(c.region) regions.push(c.region); if(c.type) types.push(c.type); if(c.rarity) rarities.push(c.rarity); });
+    if(getHomeRegion()) regions.push(getHomeRegion());
+    return {regions:unique(regions), types:unique(types), rarities:unique(rarities)};
+  }
+  function choose(arr, seed, fallback){ return arr && arr.length ? arr[seed % arr.length] : fallback; }
+  function buildModifier(rows){
+    const pools=poolsFrom(rows); const seed=hash("dm-battle-v185-"+todayKey());
+    const region=choose(pools.regions,seed,"Home Region"); const region2=choose(pools.regions,seed+5,region);
+    const type=choose(pools.types,seed+9,"Lightning"); const type2=choose(pools.types,seed+12,type);
+    const rarity=choose(pools.rarities,seed+17,"Bronze");
+    const mods=[
+      {id:"rookie", icon:"🟢", name:"ROOKIE SHIFT", lines:["Level 1–10 drivers get +50%", "Level 11–20 drivers get +25%"], apply:c=>(c.level<=10?1.50:c.level<=20?1.25:1.05)},
+      {id:"underdog", icon:"🐾", name:"UNDERDOG DAY", lines:["Under 1000 power gets +50%", "Under 1500 power gets +25%"], apply:c=>(c.power<1000?1.50:c.power<1500?1.25:c.power>2500?1.05:1.10)},
+      {id:"region", icon:"🏠", name:String(region).toUpperCase()+" LOCAL RUSH", lines:[region+" cards get +35%", "Shiny cards get +10%"], apply:c=>(norm(c.region)===norm(region)?1.35:1.00)*(c.shiny?1.10:1.00)},
+      {id:"type", icon:"⚡", name:String(type).toUpperCase()+" WEATHER", lines:[type+" cards get +35%", type2+" cards get +15%"], apply:c=>norm(c.type)===norm(type)?1.35:(norm(c.type)===norm(type2)?1.15:1.00)},
+      {id:"bronze", icon:"🥉", name:"BRONZE COMEBACK", lines:["Bronze cards get +60%", "Diamond/Final get only +5%"], apply:c=>norm(c.rarity)==="bronze"?1.60:(["diamond","final"].includes(norm(c.rarity))?1.05:1.15)},
+      {id:"rarity", icon:"✨", name:String(rarity).toUpperCase()+" SPOTLIGHT", lines:[rarity+" cards get +40%", "Lowest-power picked card gets +15%"], apply:c=>norm(c.rarity)===norm(rarity)?1.40:1.05},
+      {id:"home", icon:"🏆", name:"LOCAL HERO", lines:["Home-region cards get +40%", "Outside-region low cards get +15%"], apply:c=>norm(c.region)===norm(getHomeRegion())?1.40:(c.level<=15?1.15:1.00)},
+      {id:"school", icon:"🎒", name:"SCHOOL RUN", lines:["Level 1–20 cards get +35%", "Under 1200 power gets another +15%"], apply:c=>(c.level<=20?1.35:1.00)*(c.power<1200?1.15:1.00)},
+      {id:"fuel", icon:"⛽", name:"FUEL CRISIS", lines:["Lowest-power cards gain +30%", "Big cards are less dominant"], apply:c=>c.power<1200?1.30:(c.power>2500?0.90:1.05)},
+      {id:"diverse", icon:"🗺️", name:"DIVERSE ROUTE", lines:["Auto-team favours different regions", region2+" support cards get +15%"], apply:c=>norm(c.region)===norm(region2)?1.15:1.08}
+    ];
+    const mod=mods[seed % mods.length]; mod.date=todayKey(); mod.seed=seed; return mod;
+  }
+  function modifiedScore(card, mod, salt){
+    let mult=1; try{ mult=mod.apply(card) || 1; }catch(e){}
+    const luck = 0.94 + ((hash(todayKey()+card.uid+salt)%13)/100); // 0.94-1.06 stable daily luck
+    return Math.round(number(card.power,0) * mult * luck);
+  }
+  function selectTeam(cards, mod, salt){
+    const seenRegions={}; const seenTypes={};
+    return (cards||[]).map(c=>Object.assign({}, c, {battleScore: modifiedScore(c,mod,salt)}))
+      .sort((a,b)=>b.battleScore-a.battleScore)
+      .filter(c=>{
+        if(mod.id==="diverse"){
+          const r=norm(c.region); const t=norm(c.type);
+          if((seenRegions[r]||0)>=1 && Object.keys(seenRegions).length<3) return false;
+          seenRegions[r]=(seenRegions[r]||0)+1; seenTypes[t]=(seenTypes[t]||0)+1; return true;
+        }
+        return true;
+      }).slice(0,3);
+  }
+  function xpNeeded(level){ return 50 + (number(level,1) * 25); }
+  function promotionThreshold(rarity){ return {Bronze:300, Silver:800, Gold:1500, Platinum:2500, Diamond:4000, Final:999999}[rarity] || 300; }
+  function nextRarity(r){ const i=RARITY_ORDER.findIndex(x=>norm(x)===norm(r)); return i>=0 && i<RARITY_ORDER.length-1 ? RARITY_ORDER[i+1] : ""; }
+  function awardCardXP(team, winningUidSet, mvpUid){
+    const stats=getBattleStats(); const updates=[];
+    team.forEach(card=>{
+      const key=cardKey(card); const st=stats[key] || {xp:0,careerXP:0,battles:0,wins:0,bonusPower:0,bonusLevel:0,promotionAvailable:false};
+      const won = winningUidSet.has(key); let gain = won ? 25 : 10;
+      if(key===mvpUid) gain += 10;
+      if(won && card.power < 1200) gain += 15;
+      st.xp = number(st.xp,0) + gain; st.careerXP = number(st.careerXP,0) + gain; st.battles = number(st.battles,0) + 1; if(won) st.wins = number(st.wins,0) + 1;
+      let levelUps=0; let needed=xpNeeded(number(card.level,1)+number(st.bonusLevel,0));
+      while(st.xp >= needed && levelUps < 5){ st.xp -= needed; st.bonusLevel = number(st.bonusLevel,0) + 1; st.bonusPower = number(st.bonusPower,0) + 10; levelUps++; needed=xpNeeded(number(card.level,1)+number(st.bonusLevel,0)); }
+      if(nextRarity(card.rarity) && st.careerXP >= promotionThreshold(card.rarity)) st.promotionAvailable = true;
+      stats[key]=st; updates.push({name:card.name,gain,levelUps,promotion:st.promotionAvailable,next:nextRarity(card.rarity),xp:st.xp,needed});
+    });
+    setBattleStats(stats); return updates;
+  }
+
+  function ensureCss(){
+    if(document.getElementById("v185BattleCss")) return;
+    const st=document.createElement("style"); st.id="v185BattleCss";
+    st.textContent=`
+      .v185Mod{background:linear-gradient(135deg,rgba(255,210,46,.96),rgba(255,138,0,.9));color:#111;border:4px solid white;border-radius:20px;padding:14px 16px;margin:0 0 14px;box-shadow:0 8px 0 rgba(0,0,0,.28);display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:center}.v185ModIcon{font-size:42px}.v185Kicker{font-size:12px;font-weight:1000;text-transform:uppercase;letter-spacing:.8px;color:#061a3a}.v185ModName{font-size:25px;font-weight:1000;color:#061a3a;line-height:1}.v185Pills{display:flex;flex-wrap:wrap;gap:7px;margin-top:7px}.v185Pill{background:rgba(255,255,255,.75);border:1px solid rgba(0,0,0,.12);border-radius:999px;padding:6px 9px;font-size:12px;font-weight:1000}.v185BattleBtn{background:linear-gradient(180deg,#ff3f85,#b60052)!important;color:white!important;border:2px solid white!important;border-radius:12px!important;padding:9px 12px!important;font-size:12px!important;box-shadow:0 4px 0 rgba(0,0,0,.32)!important;margin-left:8px!important;white-space:nowrap}.v185BattlePage{background:rgba(0,20,60,.82);border:2px solid rgba(255,255,255,.18);border-radius:18px;padding:14px;margin-bottom:14px}.v185BattleTitle{font-size:28px;font-weight:1000;color:#ffdf38;text-shadow:2px 2px 0 #003b86;line-height:1}.v185BattleMeta{font-weight:900;opacity:.9;margin:8px 0 12px}.v185Round{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);border-radius:16px;padding:12px;margin:10px 0}.v185RoundTitle{font-weight:1000;color:#ffdf38;margin-bottom:8px}.v185Vs{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center}.v185Mini{position:relative;border:3px solid white;border-radius:16px;padding:9px;min-height:130px;text-align:center;overflow:hidden;background:#333;box-shadow:0 5px 0 rgba(0,0,0,.25)}.v185Mini:before{content:"";position:absolute;inset:0;background:linear-gradient(135deg,rgba(255,255,255,.25),transparent 28%,rgba(255,255,255,.12) 55%,transparent),radial-gradient(circle at top right,rgba(255,255,255,.38),transparent 22%);opacity:.75}.v185Mini>*{position:relative;z-index:1}.v185Mini.Bronze{background:linear-gradient(135deg,#4f2100,#b85f17 55%,#2b1200);border-color:#ff9d3c}.v185Mini.Silver{background:linear-gradient(135deg,#30343b,#929ba6 55%,#1c1f25);border-color:#dce4eb}.v185Mini.Gold{background:linear-gradient(135deg,#684800,#ffc400 55%,#5c3200);border-color:#ffe45c}.v185Mini.Platinum{background:linear-gradient(135deg,#3a1663,#ac4cff 60%,#25003c);border-color:#df9cff}.v185Mini.Diamond{background:linear-gradient(135deg,#073b66,#0d93d7 55%,#062642);border-color:#62ddff}.v185Mini.Final{background:linear-gradient(135deg,#011d54,#00d4ff 25%,#ffe600 55%,#ff2994);border-color:#fff44a}.v185Mini.shiny{background:linear-gradient(135deg,#ffe45c,#ff5fd7,#43dfff,#6eff8c,#fff45e,#ff8f2d,#b35cff)!important;border-color:#fff4a8!important;box-shadow:0 0 0 3px rgba(255,255,255,.75),0 0 22px rgba(255,230,80,.9),0 5px 0 rgba(0,0,0,.25)!important}.v185Face{width:58px;height:58px;border-radius:50%;border:3px solid white;background:#111;margin:0 auto 6px;overflow:hidden;display:flex;align-items:center;justify-content:center}.v185Face img{width:100%;height:100%;object-fit:cover}.v185Name{font-weight:1000;text-transform:uppercase;font-size:12px;line-height:1;text-shadow:2px 2px 0 rgba(0,0,0,.4)}.v185Meta{font-size:10px;font-weight:1000;margin-top:5px}.v185Score{background:rgba(0,0,0,.32);border-radius:999px;padding:4px 7px;font-size:11px;font-weight:1000;margin-top:6px;display:inline-block}.v185Result{font-size:18px;font-weight:1000;text-align:center;color:#ffdf38}.v185Summary{background:rgba(255,255,255,.12);border-radius:16px;padding:12px;margin-top:12px;font-weight:900}.v185Rewards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-top:10px}.v185Reward{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.16);border-radius:12px;padding:9px;font-size:12px;font-weight:900}.v185Back{background:linear-gradient(180deg,#ffdf38,#ffb000)!important;color:#111!important;margin-right:8px!important}.v185Start{background:linear-gradient(180deg,#34db75,#119443)!important;color:white!important}.v185SmallNote{font-size:12px;font-weight:900;opacity:.85;margin-top:8px}@media(max-width:700px){.v185Mod{grid-template-columns:1fr;text-align:center}.v185Pills{justify-content:center}.v185Vs{grid-template-columns:1fr}.v185Result{font-size:14px}.v185BattleBtn{margin:8px 0 0!important;width:100%}}
+    `;
+    document.head.appendChild(st);
+  }
+  function modifierHtml(mod){ return `<div class="v185Mod"><div class="v185ModIcon">${esc(mod.icon)}</div><div><div class="v185Kicker">Today&apos;s Battle Modifier</div><div class="v185ModName">${esc(mod.name)}</div><div class="v185Pills">${mod.lines.map(x=>`<span class="v185Pill">${esc(x)}</span>`).join("")}</div></div></div>`; }
+  function cardMini(c, score){ c=hydratePublicCard(c); return `<div class="v185Mini ${esc(c.rarity)} ${c.shiny?'shiny':''}"><div class="v185Face">${c.face?`<img src="${esc(c.face)}">`:"❔"}</div><div class="v185Name">${esc(c.name)}</div><div class="v185Meta">Lv ${esc(c.level)} • ${esc(c.type)}<br>${esc(c.region)} • ${esc(c.rarity)}</div><div class="v185Score">Battle ${Number(score||c.battleScore||c.power||0).toLocaleString()}</div></div>`; }
+
+  function renderLeaderboard(rows, metric){
+    ensureCss(); const content=document.getElementById("leaderboardContent"); if(!content) return;
+    const mod=buildModifier(rows); window.driverMonTodayModifier=mod;
+    const label = metric==="cards"?"Cards":metric==="regions"?"Regions":metric==="shinies"?"Shinies":metric==="rating"||metric==="battleRating"?"Battle Rating":"Power";
+    function value(r){ if(metric==="cards") return number(r.stats&&r.stats.cards, Array.isArray(r.publicCollection)?r.publicCollection.length:0); if(metric==="regions") return number(r.stats&&r.stats.regions,0); if(metric==="shinies") return number(r.stats&&r.stats.shinies,0); if(metric==="rating"||metric==="battleRating") return number(r.battleRating,1000); return number(r.stats&&r.stats.power,0); }
+    const seenMap = new Map();
+    (rows||[]).forEach(r=>{
+      if(!r) return;
+      const idKey = safe(r.id || r.playerId || "");
+      const nameKey = norm(r.name || r.username || "");
+      const iconKey = String(r.icon || r.avatar || "").slice(0,80);
+      const key = nameKey ? ("name:"+nameKey) : (idKey ? ("id:"+idKey) : ("icon:"+iconKey));
+      const previous = seenMap.get(key);
+      const scoreRow = x => number(x && x.updatedAt,0) + (Array.isArray(x && x.publicCollection) ? x.publicCollection.length * 1000000000000 : 0) + number(x && x.battleRating,1000);
+      if(!previous || scoreRow(r) >= scoreRow(previous)) seenMap.set(key, r);
+    });
+    const list=Array.from(seenMap.values()).sort((a,b)=>value(b)-value(a));
+    content.innerHTML = modifierHtml(mod) + (list.length ? list.map((r,i)=>{
+      const id=safe(r.id); const name=esc(r.name||r.username||"Player"); const icon=esc(r.icon||r.avatar||getIcon()); const cards=Array.isArray(r.publicCollection)?r.publicCollection.length:number(r.stats&&r.stats.cards,0); const home=esc(r.homeRegion||r.region||""); const rating=number(r.battleRating,1000);
+      const isMe = safe(id)===safe(getId());
+      const lockedToday = hasBattledOpponentToday(id);
+      const btnDisabled = isMe || lockedToday;
+      const btnText = lockedToday ? "Battled Today" : "⚔ Battle";
+      return `<div class="leaderEntry ${i===0?'goldLeader':i===1?'silverLeader':i===2?'bronzeLeader':''}"><div class="leaderRank">#${i+1}</div><img class="leaderAvatarClickV182" data-player-id="${esc(id)}" src="${icon}" alt="${name}" title="Tap to view ${name}'s cards" style="width:52px;height:52px;border-radius:50%;object-fit:cover;border:3px solid white;margin-right:8px;cursor:pointer;background:#10234e;"><div class="leaderMain"><div class="leaderName">${name}${isMe?' <span style="font-size:11px;color:#ffdf38;">YOU</span>':''}</div><div class="leaderMeta">${home?`Home: ${home} • `:""}${cards} public cards • Battle Rating ${rating}<br><span style="color:#ffdf38;font-weight:1000;">Tap picture to view cards</span></div></div><button class="v185BattleBtn" data-battle-id="${esc(id)}" ${btnDisabled?'disabled style="opacity:.45;"':''}>${btnText}</button><div class="leaderScore"><div class="leaderScoreValue">${Number(value(r)).toLocaleString()}</div><div class="leaderScoreLabel">${esc(label)}</div></div></div>`;
+    }).join("") : `<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">No players yet</div><div class="leaderMeta">No public Firebase players were found.</div></div></div>`);
+  }
+
+  function showLeaderboard(metric){ ensureCss(); window.currentLeaderboardTab=metric||window.currentLeaderboardTab||"battleRating"; const content=document.getElementById("leaderboardContent"); if(content) content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Loading battles...</div><div class="leaderMeta">Publishing your cards and reading Firebase players.</div></div></div>`; publish().finally(()=>readRows().then(rows=>renderLeaderboard(rows, window.currentLeaderboardTab))); }
+
+  const DAILY_LIMITS_KEY = "drivermonDailyBattleLimits_v190";
+  function getDailyLimits(){
+    let obj={};
+    try{ obj=JSON.parse(localStorage.getItem(DAILY_LIMITS_KEY)||"{}"); }catch(e){ obj={}; }
+    const dk=todayKey();
+    if(!obj || obj.date!==dk) obj={date:dk,battledOpponents:{},usedCards:{}};
+    obj.battledOpponents=obj.battledOpponents||{};
+    obj.usedCards=obj.usedCards||{};
+    return obj;
+  }
+  function setDailyLimits(obj){ try{ localStorage.setItem(DAILY_LIMITS_KEY, JSON.stringify(obj||{})); }catch(e){} }
+  function hasBattledOpponentToday(opponentId){ const d=getDailyLimits(); return !!d.battledOpponents[safe(opponentId)]; }
+  function markDailyBattle(opponentId, team){
+    const d=getDailyLimits();
+    d.battledOpponents[safe(opponentId)] = Date.now();
+    (team||[]).forEach(c=>{ d.usedCards[cardKey(c)] = Date.now(); });
+    setDailyLimits(d);
+  }
+  function getAvailableLocalCards(){
+    const d=getDailyLimits();
+    return getLocalCards().filter(c=>!d.usedCards[cardKey(c)]);
+  }
+
+  function startBattle(opponentId){
+    ensureCss(); const content=document.getElementById("leaderboardContent"); if(!content) return;
+    content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Preparing hidden teams...</div><div class="leaderMeta">Reading opponent collection and applying today&apos;s modifier.</div></div></div>`;
+    const load = (typeof tradeDb !== "undefined" && tradeDb) ? tradeDb.ref(LB_PATH+"/"+safe(opponentId)).once("value").then(s=>s.val()) : Promise.resolve(null);
+    load.then(opp=>{
+      const me=myRow(); opp=opp||{}; opp.id=safe(opponentId); opp.name=opp.name||"Opponent"; const rows=[me,opp]; const mod=buildModifier(rows);
+      if(hasBattledOpponentToday(opponentId)){ content.innerHTML=`${modifierHtml(mod)}<div class="v185BattlePage"><div class="v185BattleTitle">Already battled today</div><div class="v185BattleMeta">You can battle ${esc(opp.name||"this player")} once per day. Try another player, or come back tomorrow.</div><button class="v185Back" onclick="showLeaderboardTab('battleRating')">Back to Leaderboard</button></div>`; return; }
+      const mine=getAvailableLocalCards(); const theirs=(opp.publicCollection||[]).map(hydratePublicCard);
+      if(mine.length<1 || theirs.length<1){ content.innerHTML=`${modifierHtml(mod)}<div class="v185BattlePage"><div class="v185BattleTitle">Battle unavailable</div><div class="v185BattleMeta">Both players need at least one published card. If your cards are all on daily cooldown, they will unlock tomorrow.</div><button class="v185Back" onclick="showLeaderboardTab('battleRating')">Back to Leaderboard</button></div>`; return; }
+      const myTeam=selectTeam(mine,mod,"me"); const opTeam=selectTeam(theirs,mod,"op" );
+      const rounds=[]; let myWins=0, opWins=0; let maxCard=null, maxScore=-1;
+      for(let i=0;i<Math.max(myTeam.length, opTeam.length, 3);i++){
+        const a=myTeam[i%myTeam.length]; const b=opTeam[i%opTeam.length];
+        const as=modifiedScore(a,mod,"me"+i); const bs=modifiedScore(b,mod,"op"+i); const win=as>=bs?"me":"op"; if(win==="me") myWins++; else opWins++;
+        if(as>maxScore){ maxScore=as; maxCard=a; }
+        rounds.push({a,b,as,bs,win});
+      }
+      const battleWon=myWins>opWins; const winningUidSet=new Set(rounds.filter(r=>r.win==="me").map(r=>cardKey(r.a))); const mvpUid=maxCard?cardKey(maxCard):"";
+      const rewards=awardCardXP(myTeam, winningUidSet, mvpUid);
+      markDailyBattle(opponentId, myTeam);
+      const oldRating=getRating(); const ratingChange=battleWon?15:-8; const newRating=setRating(oldRating+ratingChange);
+      publish();
+      content.innerHTML = `${modifierHtml(mod)}<div class="v185BattlePage"><button class="v185Back" onclick="showLeaderboardTab('battleRating')">← Back to Leaderboard</button><div class="v185BattleTitle">⚔ Battle vs ${esc(opp.name||"Opponent")}</div><div class="v185BattleMeta">Teams were selected secretly by today&apos;s modifier. Result: <b style="color:#ffdf38;">${battleWon?"YOU WON":"YOU LOST"} ${myWins}-${opWins}</b> • Rating ${oldRating} → ${newRating} (${ratingChange>0?"+":""}${ratingChange})</div>${rounds.map((r,i)=>`<div class="v185Round"><div class="v185RoundTitle">Round ${i+1}</div><div class="v185Vs">${cardMini(r.a,r.as)}<div class="v185Result">${r.win==="me"?"WIN":"LOSE"}<br><small>${r.as} vs ${r.bs}</small></div>${cardMini(r.b,r.bs)}</div></div>`).join("")}<div class="v185Summary"><b>Driver XP earned</b><div class="v185Rewards">${rewards.map(x=>`<div class="v185Reward"><b>${esc(x.name)}</b><br>+${x.gain} XP${x.levelUps?`<br>LEVEL UP x${x.levelUps} • +${x.levelUps*10} Power`:""}${x.promotion&&x.next?`<br>⭐ Promotion available to ${esc(x.next)}`:""}</div>`).join("")}</div><div class="v185SmallNote">These cards are now on cooldown and cannot be used again until tomorrow. Promotions are being tracked now.</div></div></div>`;
+    }).catch(err=>{ content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Battle could not load</div><div class="leaderMeta">${esc(err&&err.message?err.message:err)}</div></div></div>`; });
+  }
+
+  window.showLeaderboardTab = showLeaderboard;
+  window.openLeaderboard = function(){ ensureCss(); const overlay=document.getElementById("leaderboardOverlay"); if(overlay) overlay.style.display="block"; showLeaderboard(window.currentLeaderboardTab||"battleRating"); };
+  window.startDriverMonBattle = startBattle;
+  document.addEventListener("click", function(e){ const b=e.target&&e.target.closest?e.target.closest("[data-battle-id]"):null; if(b){ e.preventDefault(); e.stopPropagation(); if(!b.disabled) startBattle(b.dataset.battleId); } }, true);
+  const oldSave=window.saveCollection; if(typeof oldSave==="function") window.saveCollection=function(){ const r=oldSave.apply(this,arguments); setTimeout(publish,300); return r; };
+  window.addEventListener("load", function(){ ensureCss(); setTimeout(publish,900); setTimeout(publish,2600); });
 })();
 </script>
