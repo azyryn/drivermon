@@ -7120,6 +7120,140 @@ window.addEventListener("DOMContentLoaded", function(){
 })();
 </script>
 
+
+
+<!-- v191 Stable Player Identity / Firebase Leaderboard De-duplicator
+     Fixes: browser refresh/private-mode style duplicate leaderboard rows by using a canonical player ID from the saved username,
+     and cleaning old rows with the same player name after publishing. -->
+<script>
+(function(){
+  const LB_PATH = "trades/__leaderboardPlayers";
+  const ID_KEYS = [
+    "drivermonStablePlayerId_v191",
+    "drivermonPlayerId_v178",
+    "drivermonPlayerId_v177",
+    "drivermonPlayerId",
+    "playerId"
+  ];
+  const PROFILE_KEYS = ["driverMonPlayerProfile","playerProfile","drivermonProfile","drivermon_player_profile"];
+
+  function safe(s){ return String(s||"").trim().replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90) || "player"; }
+  function norm(s){ return String(s||"").trim().toLowerCase(); }
+  function slugName(s){ return safe(String(s||"player").trim().toLowerCase().replace(/\s+/g,"_")); }
+  function getProfile(){
+    try{ if(typeof getPlayerProfile === "function"){ const p=getPlayerProfile(); if(p && typeof p === "object") return p; } }catch(e){}
+    for(const k of PROFILE_KEYS){ try{ const raw=localStorage.getItem(k); if(raw){ const p=JSON.parse(raw); if(p && typeof p === "object") return p; } }catch(e){} }
+    return {};
+  }
+  function getPlayerName(){
+    const p=getProfile();
+    let name = p.username || p.name || p.playerName || p.displayName || "";
+    try{ if(!name && typeof playerName !== "undefined") name = playerName; }catch(e){}
+    name = String(name || "Player").trim() || "Player";
+    return name;
+  }
+  function canonicalId(){
+    const name = getPlayerName();
+    // Once the player has a real chosen name, make the Firebase key deterministic.
+    // This prevents a new random local-storage ID from creating another leaderboard person.
+    let id = /^player$/i.test(name) ? "" : ("dm_" + slugName(name));
+    if(!id){
+      try{ id = localStorage.getItem("drivermonStablePlayerId_v191") || ""; }catch(e){}
+      if(!id) id = "dm_guest_" + Math.random().toString(36).slice(2,10);
+    }
+    id = safe(id);
+    try{ ID_KEYS.forEach(k=>localStorage.setItem(k,id)); }catch(e){}
+    window.driverMonCanonicalPlayerId = id;
+    return id;
+  }
+  function isLeaderboardChildPath(path){
+    path = String(path||"").replace(/^\/+/,"");
+    return path.indexOf(LB_PATH + "/") === 0;
+  }
+  function canonicalLeaderboardPath(){ return LB_PATH + "/" + canonicalId(); }
+
+  // Make future scripts/old scripts write this device to the same Firebase row.
+  // Reads still work normally; only set/update/transaction/remove on this device's own leaderboard row are redirected.
+  try{
+    if(typeof tradeDb !== "undefined" && tradeDb && !tradeDb.__dm_v191_stable_identity){
+      const originalRef = tradeDb.ref.bind(tradeDb);
+      tradeDb.ref = function(path){
+        const originalPath = String(path || "");
+        const ref = originalRef(path);
+        if(isLeaderboardChildPath(originalPath)){
+          const makeRedirect = (method) => function(){
+            const args = arguments;
+            try{ return originalRef(canonicalLeaderboardPath())[method].apply(originalRef(canonicalLeaderboardPath()), args); }
+            catch(e){ return ref[method].apply(ref, args); }
+          };
+          try{
+            ref.update = makeRedirect("update");
+            ref.set = makeRedirect("set");
+          }catch(e){}
+        }
+        return ref;
+      };
+      tradeDb.__dm_v191_stable_identity = true;
+    }
+  }catch(e){ console.warn("v191 stable ID ref patch failed", e); }
+
+  function cleanupDuplicateRows(){
+    if(typeof tradeDb === "undefined" || !tradeDb) return;
+    const myName = norm(getPlayerName());
+    const myId = canonicalId();
+    if(!myName || myName === "player") return;
+    tradeDb.ref(LB_PATH).once("value").then(snap=>{
+      const val = snap.val() || {};
+      const updates = {};
+      let best = null;
+      Object.keys(val).forEach(id=>{
+        const row = val[id] || {};
+        const rowName = norm(row.name || row.username || row.playerName || "");
+        if(rowName === myName){
+          const collectionSize = Array.isArray(row.publicCollection) ? row.publicCollection.length : 0;
+          const score = Number(row.updatedAt||0) + collectionSize * 1000000000000 + Number(row.battleRating||1000);
+          if(!best || score > best.score) best = {id,row,score};
+        }
+      });
+      if(best){
+        const merged = Object.assign({}, best.row, { id: myId, name: best.row.name || getPlayerName(), updatedAt: Date.now(), stableIdentity:"v191" });
+        updates[myId] = merged;
+        Object.keys(val).forEach(id=>{
+          const row = val[id] || {};
+          const rowName = norm(row.name || row.username || row.playerName || "");
+          if(rowName === myName && id !== myId) updates[id] = null;
+        });
+        return tradeDb.ref(LB_PATH).update(updates);
+      }
+    }).catch(e=>console.warn("v191 duplicate cleanup failed", e));
+  }
+
+  function publishCanonicalNow(){
+    try{
+      if(typeof tradeDb === "undefined" || !tradeDb) return;
+      const id = canonicalId();
+      let row = null;
+      try{ if(typeof myRow === "function") row = myRow(); }catch(e){}
+      // myRow is scoped in older scripts, so fall back to updating identity fields only if unavailable.
+      row = Object.assign({}, row || {}, { id:id, name:getPlayerName(), stableIdentity:"v191", updatedAt:Date.now() });
+      tradeDb.ref(LB_PATH + "/" + id).update(row).then(()=>cleanupDuplicateRows()).catch(()=>cleanupDuplicateRows());
+    }catch(e){ cleanupDuplicateRows(); }
+  }
+
+  // Re-save all known local ID keys immediately and after profile/old leaderboard scripts run.
+  canonicalId();
+  window.addEventListener("load", function(){
+    setTimeout(publishCanonicalNow, 600);
+    setTimeout(publishCanonicalNow, 1800);
+    setTimeout(cleanupDuplicateRows, 3500);
+  });
+  document.addEventListener("click", function(e){
+    const saveish = e.target && e.target.closest && e.target.closest("button,input[type=button],input[type=submit]");
+    if(saveish) setTimeout(publishCanonicalNow, 700);
+  }, true);
+})();
+</script>
+
 </body>
 </html>
 
