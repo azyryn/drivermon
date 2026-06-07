@@ -1438,7 +1438,7 @@ window.addEventListener("DOMContentLoaded", function(){
 (function(){
   const hidePopup = localStorage.getItem('drivermon_hide_welcome_v3');
 
-  if(false && hidePopup === 'true'){
+  if(hidePopup === 'true'){
     const popup = document.getElementById('welcomePopup');
     if(popup) popup.remove();
     return;
@@ -1450,7 +1450,7 @@ window.addEventListener("DOMContentLoaded", function(){
   if(closeBtn){
     closeBtn.addEventListener('click', ()=>{
       if(dontShow && dontShow.checked){
-        /* demo mode: do not permanently hide welcome */
+        localStorage.setItem('drivermon_hide_welcome_v3','true'); localStorage.setItem('drivermon_hide_welcome_v2','true');
       }
 
       const popup = document.getElementById('welcomePopup');
@@ -5273,11 +5273,13 @@ const DEMO_UNDISCOVERED_BY_REGION = {
 };
 
 function forceIntroPopupForDemo(){
-  localStorage.removeItem("drivermon_hide_welcome_v3");
   const popup = document.getElementById("welcomePopup");
-  if(popup){
-    popup.style.display = "flex";
+  if(!popup) return;
+  if(localStorage.getItem("drivermon_hide_welcome_v3") === "true" || localStorage.getItem("drivermon_hide_welcome_v2") === "true"){
+    popup.style.display = "none";
+    return;
   }
+  popup.style.display = "flex";
 }
 
 function sampleUndiscoveredForRegion(region){
@@ -5372,7 +5374,6 @@ window.addEventListener("load", function(){
 <script>
 /* v137 force welcome popup to show on opening */
 window.addEventListener("DOMContentLoaded", function(){
-  localStorage.removeItem("drivermon_hide_welcome_v3");
   const popup = document.getElementById("welcomePopup");
   if(popup){
     popup.style.display = "flex";
@@ -7303,6 +7304,39 @@ window.addEventListener("DOMContentLoaded", function(){
   }
 }
 </style>
+
+
+
+<script>
+/* v202: final welcome popup persistence fix. */
+(function(){
+  function applyWelcomePreference(){
+    const popup = document.getElementById('welcomePopup');
+    const closeBtn = document.getElementById('closeWelcomeBtn');
+    const dontShow = document.getElementById('dontShowAgain');
+    const hidden = localStorage.getItem('drivermon_hide_welcome_v3') === 'true' || localStorage.getItem('drivermon_hide_welcome_v2') === 'true';
+
+    if(popup && hidden){ popup.style.display = 'none'; }
+    if(dontShow && hidden){ dontShow.checked = true; }
+
+    if(closeBtn && !closeBtn.dataset.v202WelcomeFixed){
+      closeBtn.dataset.v202WelcomeFixed = 'true';
+      closeBtn.addEventListener('click', function(){
+        if(dontShow && dontShow.checked){
+          localStorage.setItem('drivermon_hide_welcome_v3','true');
+          localStorage.setItem('drivermon_hide_welcome_v2','true');
+        }
+        if(popup) popup.style.display = 'none';
+      });
+    }
+  }
+
+  window.addEventListener('DOMContentLoaded', applyWelcomePreference);
+  window.addEventListener('load', applyWelcomePreference);
+  setTimeout(applyWelcomePreference, 250);
+  setTimeout(applyWelcomePreference, 1000);
+})();
+</script>
 
 </body>
 </html>
