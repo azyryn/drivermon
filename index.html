@@ -7120,140 +7120,6 @@ window.addEventListener("DOMContentLoaded", function(){
 })();
 </script>
 
-
-
-<!-- v191 Stable Player Identity / Firebase Leaderboard De-duplicator
-     Fixes: browser refresh/private-mode style duplicate leaderboard rows by using a canonical player ID from the saved username,
-     and cleaning old rows with the same player name after publishing. -->
-<script>
-(function(){
-  const LB_PATH = "trades/__leaderboardPlayers";
-  const ID_KEYS = [
-    "drivermonStablePlayerId_v191",
-    "drivermonPlayerId_v178",
-    "drivermonPlayerId_v177",
-    "drivermonPlayerId",
-    "playerId"
-  ];
-  const PROFILE_KEYS = ["driverMonPlayerProfile","playerProfile","drivermonProfile","drivermon_player_profile"];
-
-  function safe(s){ return String(s||"").trim().replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90) || "player"; }
-  function norm(s){ return String(s||"").trim().toLowerCase(); }
-  function slugName(s){ return safe(String(s||"player").trim().toLowerCase().replace(/\s+/g,"_")); }
-  function getProfile(){
-    try{ if(typeof getPlayerProfile === "function"){ const p=getPlayerProfile(); if(p && typeof p === "object") return p; } }catch(e){}
-    for(const k of PROFILE_KEYS){ try{ const raw=localStorage.getItem(k); if(raw){ const p=JSON.parse(raw); if(p && typeof p === "object") return p; } }catch(e){} }
-    return {};
-  }
-  function getPlayerName(){
-    const p=getProfile();
-    let name = p.username || p.name || p.playerName || p.displayName || "";
-    try{ if(!name && typeof playerName !== "undefined") name = playerName; }catch(e){}
-    name = String(name || "Player").trim() || "Player";
-    return name;
-  }
-  function canonicalId(){
-    const name = getPlayerName();
-    // Once the player has a real chosen name, make the Firebase key deterministic.
-    // This prevents a new random local-storage ID from creating another leaderboard person.
-    let id = /^player$/i.test(name) ? "" : ("dm_" + slugName(name));
-    if(!id){
-      try{ id = localStorage.getItem("drivermonStablePlayerId_v191") || ""; }catch(e){}
-      if(!id) id = "dm_guest_" + Math.random().toString(36).slice(2,10);
-    }
-    id = safe(id);
-    try{ ID_KEYS.forEach(k=>localStorage.setItem(k,id)); }catch(e){}
-    window.driverMonCanonicalPlayerId = id;
-    return id;
-  }
-  function isLeaderboardChildPath(path){
-    path = String(path||"").replace(/^\/+/,"");
-    return path.indexOf(LB_PATH + "/") === 0;
-  }
-  function canonicalLeaderboardPath(){ return LB_PATH + "/" + canonicalId(); }
-
-  // Make future scripts/old scripts write this device to the same Firebase row.
-  // Reads still work normally; only set/update/transaction/remove on this device's own leaderboard row are redirected.
-  try{
-    if(typeof tradeDb !== "undefined" && tradeDb && !tradeDb.__dm_v191_stable_identity){
-      const originalRef = tradeDb.ref.bind(tradeDb);
-      tradeDb.ref = function(path){
-        const originalPath = String(path || "");
-        const ref = originalRef(path);
-        if(isLeaderboardChildPath(originalPath)){
-          const makeRedirect = (method) => function(){
-            const args = arguments;
-            try{ return originalRef(canonicalLeaderboardPath())[method].apply(originalRef(canonicalLeaderboardPath()), args); }
-            catch(e){ return ref[method].apply(ref, args); }
-          };
-          try{
-            ref.update = makeRedirect("update");
-            ref.set = makeRedirect("set");
-          }catch(e){}
-        }
-        return ref;
-      };
-      tradeDb.__dm_v191_stable_identity = true;
-    }
-  }catch(e){ console.warn("v191 stable ID ref patch failed", e); }
-
-  function cleanupDuplicateRows(){
-    if(typeof tradeDb === "undefined" || !tradeDb) return;
-    const myName = norm(getPlayerName());
-    const myId = canonicalId();
-    if(!myName || myName === "player") return;
-    tradeDb.ref(LB_PATH).once("value").then(snap=>{
-      const val = snap.val() || {};
-      const updates = {};
-      let best = null;
-      Object.keys(val).forEach(id=>{
-        const row = val[id] || {};
-        const rowName = norm(row.name || row.username || row.playerName || "");
-        if(rowName === myName){
-          const collectionSize = Array.isArray(row.publicCollection) ? row.publicCollection.length : 0;
-          const score = Number(row.updatedAt||0) + collectionSize * 1000000000000 + Number(row.battleRating||1000);
-          if(!best || score > best.score) best = {id,row,score};
-        }
-      });
-      if(best){
-        const merged = Object.assign({}, best.row, { id: myId, name: best.row.name || getPlayerName(), updatedAt: Date.now(), stableIdentity:"v191" });
-        updates[myId] = merged;
-        Object.keys(val).forEach(id=>{
-          const row = val[id] || {};
-          const rowName = norm(row.name || row.username || row.playerName || "");
-          if(rowName === myName && id !== myId) updates[id] = null;
-        });
-        return tradeDb.ref(LB_PATH).update(updates);
-      }
-    }).catch(e=>console.warn("v191 duplicate cleanup failed", e));
-  }
-
-  function publishCanonicalNow(){
-    try{
-      if(typeof tradeDb === "undefined" || !tradeDb) return;
-      const id = canonicalId();
-      let row = null;
-      try{ if(typeof myRow === "function") row = myRow(); }catch(e){}
-      // myRow is scoped in older scripts, so fall back to updating identity fields only if unavailable.
-      row = Object.assign({}, row || {}, { id:id, name:getPlayerName(), stableIdentity:"v191", updatedAt:Date.now() });
-      tradeDb.ref(LB_PATH + "/" + id).update(row).then(()=>cleanupDuplicateRows()).catch(()=>cleanupDuplicateRows());
-    }catch(e){ cleanupDuplicateRows(); }
-  }
-
-  // Re-save all known local ID keys immediately and after profile/old leaderboard scripts run.
-  canonicalId();
-  window.addEventListener("load", function(){
-    setTimeout(publishCanonicalNow, 600);
-    setTimeout(publishCanonicalNow, 1800);
-    setTimeout(cleanupDuplicateRows, 3500);
-  });
-  document.addEventListener("click", function(e){
-    const saveish = e.target && e.target.closest && e.target.closest("button,input[type=button],input[type=submit]");
-    if(saveish) setTimeout(publishCanonicalNow, 700);
-  }, true);
-})();
-</script>
-
 </body>
 </html>
 
@@ -9372,5 +9238,154 @@ img[alt="DriverDex"]{
   document.addEventListener("click", function(e){ const b=e.target&&e.target.closest?e.target.closest("[data-battle-id]"):null; if(b){ e.preventDefault(); e.stopPropagation(); if(!b.disabled) startBattle(b.dataset.battleId); } }, true);
   const oldSave=window.saveCollection; if(typeof oldSave==="function") window.saveCollection=function(){ const r=oldSave.apply(this,arguments); setTimeout(publish,300); return r; };
   window.addEventListener("load", function(){ ensureCss(); setTimeout(publish,900); setTimeout(publish,2600); });
+})();
+</script>
+
+<!-- v192: robust leaderboard reader + duplicate cleanup + stable player id -->
+<script>
+(function(){
+  const LB_PATH = "trades/__leaderboardPlayers";
+  const PLAYER_ID_KEYS = ["drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId","drivermonDevicePlayerId"];
+  const DAILY_LIMITS_KEY = "drivermonDailyBattleLimits_v190";
+
+  function esc(s){return String(s==null?"":s).replace(/[&<>\"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));}
+  function safe(s){return String(s||"player").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90)||"player";}
+  function norm(s){return String(s||"").trim().toLowerCase();}
+  function num(v,f){v=Number(v);return Number.isFinite(v)?v:(f||0);}
+  function hash(s){let h=0; s=String(s||""); for(let i=0;i<s.length;i++){h=((h<<5)-h)+s.charCodeAt(i); h|=0;} return Math.abs(h);}
+  function todayKey(){const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");}
+  function getProfile(){
+    try{ if(typeof getPlayerProfile==="function"){ const p=getPlayerProfile(); if(p&&typeof p==="object") return p; } }catch(e){}
+    const keys=["drivermon_player_profile_v1","driverMonPlayerProfile","playerProfile","drivermonProfile","drivermon_player_profile"];
+    for(const k of keys){ try{ const raw=localStorage.getItem(k); if(raw){ const p=JSON.parse(raw); if(p&&typeof p==="object") return p; } }catch(e){} }
+    return {};
+  }
+  function localName(){ const p=getProfile(); return String(p.username||p.name||p.playerName||p.displayName||"").trim(); }
+  function localIcon(){ const p=getProfile(); for(const x of [p.avatar,p.avatarData,p.icon,p.profilePic,p.profileImage,p.image,p.photo]) if(String(x||"").startsWith("data:image")) return String(x); return ""; }
+  function stableId(){
+    const name=localName();
+    let id="";
+    // If the profile has a real name, use a stable name-based id. This stops private/refresh duplicates.
+    if(name && norm(name)!=="player" && norm(name)!=="guest") id = "dm_" + safe(norm(name));
+    if(!id){ for(const k of PLAYER_ID_KEYS){ try{ const v=localStorage.getItem(k); if(v){ id=safe(v); break; } }catch(e){} } }
+    if(!id) id = "dm_device_" + Math.random().toString(36).slice(2,10) + "_" + Date.now().toString(36);
+    try{ PLAYER_ID_KEYS.forEach(k=>localStorage.setItem(k,id)); }catch(e){}
+    return id;
+  }
+  // Run immediately so the older battle publisher reuses this id on load.
+  const MY_ID = stableId();
+
+  function getDailyLimits(){ let o={}; try{o=JSON.parse(localStorage.getItem(DAILY_LIMITS_KEY)||"{}");}catch(e){o={};} if(!o||o.date!==todayKey()) o={date:todayKey(),battledOpponents:{},usedCards:{}}; o.battledOpponents=o.battledOpponents||{}; return o; }
+  function hasBattledOpponentToday(id){ try{return !!getDailyLimits().battledOpponents[safe(id)];}catch(e){return false;} }
+
+  function rowScore(r){
+    const cards = Array.isArray(r&&r.publicCollection) ? r.publicCollection.length : num(r&&r.stats&&r.stats.cards,0);
+    const rating = num(r&&r.battleRating,1000);
+    const updated = Date.parse(r&&r.updatedAt) || Date.parse(r&&r.collectionUpdatedAt) || num(r&&r.updatedAt,0) || num(r&&r.stats&&r.stats.updatedAt,0);
+    return cards*1000000000000 + rating*1000000 + updated;
+  }
+  function normaliseRows(raw){
+    const rows=[];
+    if(raw && typeof raw==="object"){
+      Object.keys(raw).forEach(k=>{
+        const r=raw[k]||{};
+        if(typeof r!=="object") return;
+        r.id=safe(r.id||r.playerId||k);
+        r.name=String(r.name||r.username||r.displayName||"Player").trim()||"Player";
+        r.username=r.username||r.name;
+        r.icon=r.icon||r.avatar||"";
+        r.avatar=r.avatar||r.icon||"";
+        r.homeRegion=r.homeRegion||r.region||"";
+        r.region=r.region||r.homeRegion||"";
+        r.battleRating=num(r.battleRating,1000)||1000;
+        r.stats=r.stats||{};
+        if(!Array.isArray(r.publicCollection)) r.publicCollection=[];
+        rows.push(r);
+      });
+    }
+    return rows;
+  }
+  function dedupeRows(rows){
+    const groups=new Map();
+    (rows||[]).forEach(r=>{
+      const nameKey=norm(r.name||r.username);
+      const key=nameKey && nameKey!=="player" ? "name:"+nameKey : "id:"+safe(r.id);
+      const old=groups.get(key);
+      if(!old || rowScore(r)>=rowScore(old)) groups.set(key,r);
+    });
+    return Array.from(groups.values());
+  }
+  function cleanupDuplicates(rows, keepRows){
+    if(!(typeof tradeDb!=="undefined" && tradeDb)) return;
+    const keep=new Set((keepRows||[]).map(r=>safe(r.id)));
+    (rows||[]).forEach(r=>{
+      const id=safe(r.id);
+      const n=norm(r.name||r.username);
+      if(!id || keep.has(id) || !n || n==="player") return;
+      // only delete obvious old duplicate records with the same name, not random different players
+      try{ tradeDb.ref(LB_PATH+"/"+id).remove(); }catch(e){}
+    });
+  }
+  function poolsFrom(rows){
+    const regions=[],types=[],rarities=[];
+    (rows||[]).forEach(r=>{ if(r.homeRegion) regions.push(r.homeRegion); (r.publicCollection||[]).forEach(c=>{ if(c.region) regions.push(c.region); if(c.type) types.push(c.type); if(c.rarity) rarities.push(c.rarity); }); });
+    function uniq(a){return Array.from(new Set(a.filter(Boolean).map(x=>String(x).trim()).filter(Boolean)));}
+    return {regions:uniq(regions),types:uniq(types),rarities:uniq(rarities)};
+  }
+  function choose(a,seed,f){return (a&&a.length)?a[seed%a.length]:f;}
+  function todayModifier(rows){
+    const p=poolsFrom(rows), seed=hash("dm-battle-v185-"+todayKey());
+    const region=choose(p.regions,seed,"Home Region"), region2=choose(p.regions,seed+5,region);
+    const type=choose(p.types,seed+9,"Lightning"), type2=choose(p.types,seed+12,type);
+    const rarity=choose(p.rarities,seed+17,"Bronze");
+    const mods=[
+      {icon:"🟢", name:"ROOKIE SHIFT", lines:["Level 1–10 drivers get +50%","Level 11–20 drivers get +25%"]},
+      {icon:"🐾", name:"UNDERDOG DAY", lines:["Under 1000 power gets +50%","Under 1500 power gets +25%"]},
+      {icon:"🏠", name:String(region).toUpperCase()+" LOCAL RUSH", lines:[region+" cards get +35%","Shiny cards get +10%"]},
+      {icon:"⚡", name:String(type).toUpperCase()+" WEATHER", lines:[type+" cards get +35%",type2+" cards get +15%"]},
+      {icon:"🥉", name:"BRONZE COMEBACK", lines:["Bronze cards get +60%","Diamond/Final get only +5%"]},
+      {icon:"✨", name:String(rarity).toUpperCase()+" SPOTLIGHT", lines:[rarity+" cards get +40%","Lowest-power picked card gets +15%"]},
+      {icon:"🏆", name:"LOCAL HERO", lines:["Home-region cards get +40%","Outside-region low cards get +15%"]},
+      {icon:"🎒", name:"SCHOOL RUN", lines:["Level 1–20 cards get +35%","Under 1200 power gets another +15%"]},
+      {icon:"⛽", name:"FUEL CRISIS", lines:["Lowest-power cards gain +30%","Big cards are less dominant"]},
+      {icon:"🗺️", name:"DIVERSE ROUTE", lines:["Auto-team favours different regions",region2+" support cards get +15%"]}
+    ];
+    return mods[seed%mods.length];
+  }
+  function ensureCss(){
+    if(document.getElementById("v192Css")) return;
+    const st=document.createElement("style"); st.id="v192Css"; st.textContent=`
+      .v192Mod{background:linear-gradient(135deg,rgba(255,210,46,.96),rgba(255,138,0,.9));color:#111;border:4px solid white;border-radius:20px;padding:14px 16px;margin:0 0 14px;box-shadow:0 8px 0 rgba(0,0,0,.28);display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:center}.v192ModIcon{font-size:42px}.v192Kicker{font-size:12px;font-weight:1000;text-transform:uppercase;letter-spacing:.8px;color:#061a3a}.v192ModName{font-size:25px;font-weight:1000;line-height:1;color:#061a3a}.v192Pills{display:flex;flex-wrap:wrap;gap:7px;margin-top:7px}.v192Pill{background:rgba(255,255,255,.75);border:1px solid rgba(0,0,0,.12);border-radius:999px;padding:6px 9px;font-size:12px;font-weight:1000}.v192BattleBtn{background:linear-gradient(180deg,#ff3f85,#b60052)!important;color:white!important;border:2px solid white!important;border-radius:12px!important;padding:9px 12px!important;font-size:12px!important;box-shadow:0 4px 0 rgba(0,0,0,.32)!important;margin-left:8px!important;white-space:nowrap}@media(max-width:700px){.v192Mod{grid-template-columns:1fr;text-align:center}.v192Pills{justify-content:center}.v192BattleBtn{margin:8px 0 0!important;width:100%}}
+    `; document.head.appendChild(st);
+  }
+  function modHtml(m){return `<div class="v192Mod"><div class="v192ModIcon">${esc(m.icon)}</div><div><div class="v192Kicker">Today&apos;s Battle Modifier</div><div class="v192ModName">${esc(m.name)}</div><div class="v192Pills">${(m.lines||[]).map(x=>`<span class="v192Pill">${esc(x)}</span>`).join("")}</div></div></div>`;}
+  function valueFor(r,metric){ if(metric==="cards") return Array.isArray(r.publicCollection)?r.publicCollection.length:num(r.stats&&r.stats.cards,0); if(metric==="regions") return num(r.stats&&r.stats.regions,0); if(metric==="shinies") return num(r.stats&&r.stats.shinies,0); if(metric==="power") return num(r.stats&&r.stats.power,0); return num(r.battleRating,1000); }
+  function labelFor(metric){return metric==="cards"?"Cards":metric==="regions"?"Regions":metric==="shinies"?"Shinies":metric==="power"?"Power":"Battle Rating";}
+  function render(rows,metric){
+    ensureCss(); const content=document.getElementById("leaderboardContent"); if(!content) return;
+    metric=metric||window.currentLeaderboardTab||"battleRating";
+    const all=normaliseRows(rows), list=dedupeRows(all).sort((a,b)=>valueFor(b,metric)-valueFor(a,metric));
+    cleanupDuplicates(all,list);
+    const mod=todayModifier(list); window.driverMonTodayModifier=mod;
+    const myId=stableId(), myName=norm(localName());
+    content.innerHTML=modHtml(mod)+(list.length?list.map((r,i)=>{
+      const id=safe(r.id), name=esc(r.name||r.username||"Player"), icon=esc(r.icon||r.avatar||localIcon()||"");
+      const cards=Array.isArray(r.publicCollection)?r.publicCollection.length:num(r.stats&&r.stats.cards,0);
+      const home=esc(r.homeRegion||r.region||""); const rating=num(r.battleRating,1000);
+      const isMe=id===myId || (myName && norm(r.name||r.username)===myName);
+      const locked=hasBattledOpponentToday(id); const disabled=isMe||locked;
+      return `<div class="leaderEntry ${i===0?'goldLeader':i===1?'silverLeader':i===2?'bronzeLeader':''}"><div class="leaderRank">#${i+1}</div><img class="leaderAvatarClickV182" data-player-id="${esc(id)}" src="${icon}" alt="${name}" title="Tap to view ${name}'s cards" style="width:52px;height:52px;border-radius:50%;object-fit:cover;border:3px solid white;margin-right:8px;cursor:pointer;background:#10234e;"><div class="leaderMain"><div class="leaderName">${name}${isMe?' <span style="font-size:11px;color:#ffdf38;">YOU</span>':''}</div><div class="leaderMeta">${home?`Home: ${home} • `:""}${cards} public cards • Battle Rating ${rating}<br><span style="color:#ffdf38;font-weight:1000;">Tap picture to view cards</span></div></div><button class="v192BattleBtn" data-battle-id="${esc(id)}" ${disabled?'disabled style="opacity:.45;"':''}>${locked?'Battled Today':'⚔ Battle'}</button><div class="leaderScore"><div class="leaderScoreValue">${Number(valueFor(r,metric)).toLocaleString()}</div><div class="leaderScoreLabel">${esc(labelFor(metric))}</div></div></div>`;
+    }).join(""):`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">No players yet</div><div class="leaderMeta">No public Firebase players were found.</div></div></div>`);
+  }
+  function show(metric){
+    ensureCss(); window.currentLeaderboardTab=metric||window.currentLeaderboardTab||"battleRating";
+    const content=document.getElementById("leaderboardContent");
+    if(content) content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Loading battles...</div><div class="leaderMeta">Reading Firebase players safely.</div></div></div>`;
+    const read=(typeof tradeDb!=="undefined"&&tradeDb)?tradeDb.ref(LB_PATH).once("value").then(s=>s.val()||{}):Promise.resolve({});
+    read.then(raw=>render(raw,window.currentLeaderboardTab)).catch(err=>{ if(content) content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Leaderboard could not load</div><div class="leaderMeta">${esc(err&&err.message?err.message:err)}</div></div></div>`; });
+  }
+  window.showLeaderboardTab=show;
+  window.openLeaderboard=function(){ ensureCss(); const overlay=document.getElementById("leaderboardOverlay"); if(overlay) overlay.style.display="block"; show(window.currentLeaderboardTab||"battleRating"); };
+  document.addEventListener("click",function(e){ const b=e.target&&e.target.closest?e.target.closest(".v192BattleBtn"):null; if(b&&b.dataset&&b.dataset.battleId){ e.preventDefault(); e.stopPropagation(); if(!b.disabled && typeof window.startDriverMonBattle==="function") window.startDriverMonBattle(b.dataset.battleId); } }, true);
 })();
 </script>
