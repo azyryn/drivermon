@@ -7120,6 +7120,142 @@ window.addEventListener("DOMContentLoaded", function(){
 })();
 </script>
 
+
+
+<!-- v193: avatar-preserving leaderboard de-dupe. Keeps v192 battle limits, but merges duplicate rows instead of throwing away the row with the good profile image. -->
+<script>
+(function(){
+  const LB_PATH = "trades/__leaderboardPlayers";
+  const DAILY_LIMITS_KEY = "drivermonDailyBattleLimits_v190";
+  const PLAYER_ID_KEYS = ["drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId","drivermonDevicePlayerId"];
+  function esc(s){return String(s==null?"":s).replace(/[&<>\"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));}
+  function safe(s){return String(s||"player").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90)||"player";}
+  function norm(s){return String(s||"").trim().toLowerCase();}
+  function num(v,f){v=Number(v);return Number.isFinite(v)?v:(f||0);}
+  function todayKey(){const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");}
+  function hash(s){let h=0; s=String(s||""); for(let i=0;i<s.length;i++){h=((h<<5)-h)+s.charCodeAt(i); h|=0;} return Math.abs(h);}
+  function getProfile(){
+    try{ if(typeof getPlayerProfile==="function"){ const p=getPlayerProfile(); if(p&&typeof p==="object") return p; } }catch(e){}
+    const keys=["drivermon_player_profile_v1","driverMonPlayerProfile","playerProfile","drivermonProfile","drivermon_player_profile"];
+    for(const k of keys){ try{ const raw=localStorage.getItem(k); if(raw){ const p=JSON.parse(raw); if(p&&typeof p==="object") return p; } }catch(e){} }
+    return {};
+  }
+  function localName(){ const p=getProfile(); return String(p.username||p.name||p.playerName||p.displayName||"").trim(); }
+  function localIcon(){ const p=getProfile(); for(const x of [p.avatar,p.avatarData,p.icon,p.profilePic,p.profileImage,p.image,p.photo]) if(isGoodImage(x)) return String(x); return ""; }
+  function stableId(){
+    const name=localName(); let id="";
+    if(name && norm(name)!=="player" && norm(name)!=="guest") id="dm_"+safe(norm(name));
+    if(!id){ for(const k of PLAYER_ID_KEYS){ try{ const v=localStorage.getItem(k); if(v){ id=safe(v); break; } }catch(e){} } }
+    if(!id) id="dm_device_"+Math.random().toString(36).slice(2,10)+"_"+Date.now().toString(36);
+    try{ PLAYER_ID_KEYS.forEach(k=>localStorage.setItem(k,id)); }catch(e){}
+    return id;
+  }
+  const MY_ID=stableId();
+  function isGoodImage(x){ x=String(x||""); return x.startsWith("data:image") && x.length>100; }
+  function imageScore(x){ x=String(x||""); if(!x) return 0; if(!x.startsWith("data:image")) return 1; return Math.min(1000000,x.length); }
+  function bestImage(){ let best=""; for(const x of arguments){ if(imageScore(x)>imageScore(best)) best=String(x||""); } return best; }
+  function cardCount(r){ return Array.isArray(r&&r.publicCollection)?r.publicCollection.length:num(r&&r.stats&&r.stats.cards,0); }
+  function updatedNum(r){ return Date.parse(r&&r.updatedAt)||Date.parse(r&&r.collectionUpdatedAt)||num(r&&r.updatedAt,0)||num(r&&r.stats&&r.stats.updatedAt,0)||0; }
+  function normaliseRows(raw){
+    const rows=[];
+    if(raw&&typeof raw==="object") Object.keys(raw).forEach(k=>{
+      const r=raw[k]||{}; if(!r||typeof r!=="object") return;
+      const out=Object.assign({},r);
+      out.id=safe(out.id||out.playerId||k);
+      out.name=String(out.name||out.username||out.displayName||"Player").trim()||"Player";
+      out.username=out.username||out.name;
+      out.icon=bestImage(out.icon,out.avatar,out.avatarData,out.profilePic,out.profileImage,out.image,out.photo);
+      out.avatar=out.icon;
+      out.homeRegion=out.homeRegion||out.region||""; out.region=out.region||out.homeRegion||"";
+      out.battleRating=num(out.battleRating,1000)||1000;
+      out.stats=out.stats||{};
+      if(!Array.isArray(out.publicCollection)) out.publicCollection=[];
+      rows.push(out);
+    });
+    return rows;
+  }
+  function mergeGroup(group){
+    group=(group||[]).filter(Boolean);
+    if(!group.length) return null;
+    const newest=group.slice().sort((a,b)=>updatedNum(b)-updatedNum(a))[0]||group[0];
+    const bestCards=group.slice().sort((a,b)=>cardCount(b)-cardCount(a))[0]||newest;
+    const bestIcon=group.reduce((best,r)=>bestImage(best,r.icon,r.avatar,r.avatarData,r.profilePic,r.profileImage,r.image,r.photo),"");
+    const meName=norm(localName());
+    const groupName=norm(newest.name||newest.username);
+    const localIsThis = meName && meName===groupName;
+    const merged=Object.assign({},newest,bestCards);
+    merged.id = safe((localIsThis?MY_ID:(newest.id||bestCards.id)) || bestCards.id);
+    merged.name = newest.name || bestCards.name || "Player";
+    merged.username = merged.username || merged.name;
+    merged.icon = localIsThis ? (localIcon() || bestIcon || merged.icon || merged.avatar || "") : (bestIcon || merged.icon || merged.avatar || "");
+    merged.avatar = merged.icon;
+    merged.publicCollection = Array.isArray(bestCards.publicCollection) ? bestCards.publicCollection : [];
+    merged.stats = Object.assign({}, newest.stats||{}, bestCards.stats||{});
+    merged.battleRating = Math.max(1000, ...group.map(r=>num(r.battleRating,1000)));
+    merged.homeRegion = merged.homeRegion || bestCards.homeRegion || bestCards.region || newest.homeRegion || newest.region || "";
+    merged.region = merged.region || merged.homeRegion || "";
+    return merged;
+  }
+  function dedupeRows(rows){
+    const groups=new Map();
+    (rows||[]).forEach(r=>{
+      const nk=norm(r.name||r.username);
+      const key=nk && nk!=="player" ? "name:"+nk : "id:"+safe(r.id);
+      if(!groups.has(key)) groups.set(key,[]);
+      groups.get(key).push(r);
+    });
+    return Array.from(groups.values()).map(mergeGroup).filter(Boolean);
+  }
+  function cleanupDuplicates(rows, keepRows){
+    if(!(typeof tradeDb!=="undefined"&&tradeDb)) return;
+    const keepNames=new Map();
+    (keepRows||[]).forEach(r=>{ const n=norm(r.name||r.username); if(n&&n!=="player") keepNames.set(n,safe(r.id)); });
+    (rows||[]).forEach(r=>{
+      const id=safe(r.id), n=norm(r.name||r.username);
+      if(!id||!n||n==="player") return;
+      const keepId=keepNames.get(n);
+      if(keepId && id!==keepId){ try{ tradeDb.ref(LB_PATH+"/"+id).remove(); }catch(e){} }
+    });
+  }
+  function getLimits(){ let o={}; try{o=JSON.parse(localStorage.getItem(DAILY_LIMITS_KEY)||"{}");}catch(e){o={};} if(!o||o.date!==todayKey()) o={date:todayKey(),battledOpponents:{},usedCards:{}}; o.battledOpponents=o.battledOpponents||{}; return o; }
+  function battled(id){ try{return !!getLimits().battledOpponents[safe(id)];}catch(e){return false;} }
+  function valueFor(r,m){ if(m==="cards")return cardCount(r); if(m==="regions")return num(r.stats&&r.stats.regions,0); if(m==="shinies")return num(r.stats&&r.stats.shinies,0); if(m==="power")return num(r.stats&&r.stats.power,0); return num(r.battleRating,1000); }
+  function labelFor(m){return m==="cards"?"Cards":m==="regions"?"Regions":m==="shinies"?"Shinies":m==="power"?"Power":"Battle Rating";}
+  function poolsFrom(rows){ const regions=[],types=[],rarities=[]; (rows||[]).forEach(r=>{ if(r.homeRegion) regions.push(r.homeRegion); (r.publicCollection||[]).forEach(c=>{ if(c.region)regions.push(c.region); if(c.type)types.push(c.type); if(c.rarity)rarities.push(c.rarity); }); }); const uniq=a=>Array.from(new Set(a.filter(Boolean).map(x=>String(x).trim()).filter(Boolean))); return {regions:uniq(regions),types:uniq(types),rarities:uniq(rarities)}; }
+  function choose(a,seed,f){return (a&&a.length)?a[seed%a.length]:f;}
+  function todayModifier(rows){ const p=poolsFrom(rows), seed=hash("dm-battle-v185-"+todayKey()); const region=choose(p.regions,seed,"Home Region"), region2=choose(p.regions,seed+5,region); const type=choose(p.types,seed+9,"Lightning"), type2=choose(p.types,seed+12,type); const rarity=choose(p.rarities,seed+17,"Bronze"); const mods=[{icon:"🟢",name:"ROOKIE SHIFT",lines:["Level 1–10 drivers get +50%","Level 11–20 drivers get +25%"]},{icon:"🐾",name:"UNDERDOG DAY",lines:["Under 1000 power gets +50%","Under 1500 power gets +25%"]},{icon:"🏠",name:String(region).toUpperCase()+" LOCAL RUSH",lines:[region+" cards get +35%","Shiny cards get +10%"]},{icon:"⚡",name:String(type).toUpperCase()+" WEATHER",lines:[type+" cards get +35%",type2+" cards get +15%"]},{icon:"🥉",name:"BRONZE COMEBACK",lines:["Bronze cards get +60%","Diamond/Final get only +5%"]},{icon:"✨",name:String(rarity).toUpperCase()+" SPOTLIGHT",lines:[rarity+" cards get +40%","Lowest-power picked card gets +15%"]},{icon:"🏆",name:"LOCAL HERO",lines:["Home-region cards get +40%","Outside-region low cards get +15%"]},{icon:"🎒",name:"SCHOOL RUN",lines:["Level 1–20 cards get +35%","Under 1200 power gets another +15%"]},{icon:"⛽",name:"FUEL CRISIS",lines:["Lowest-power cards gain +30%","Big cards are less dominant"]},{icon:"🗺️",name:"DIVERSE ROUTE",lines:["Auto-team favours different regions",region2+" support cards get +15%"]}]; return mods[seed%mods.length]; }
+  function ensureCss(){
+    if(!document.getElementById("v192Css")){ const st=document.createElement("style"); st.id="v192Css"; st.textContent=`.v192Mod{background:linear-gradient(135deg,rgba(255,210,46,.96),rgba(255,138,0,.9));color:#111;border:4px solid white;border-radius:20px;padding:14px 16px;margin:0 0 14px;box-shadow:0 8px 0 rgba(0,0,0,.28);display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:center}.v192ModIcon{font-size:42px}.v192Kicker{font-size:12px;font-weight:1000;text-transform:uppercase;letter-spacing:.8px;color:#061a3a}.v192ModName{font-size:25px;font-weight:1000;line-height:1;color:#061a3a}.v192Pills{display:flex;flex-wrap:wrap;gap:7px;margin-top:7px}.v192Pill{background:rgba(255,255,255,.75);border:1px solid rgba(0,0,0,.12);border-radius:999px;padding:6px 9px;font-size:12px;font-weight:1000}.v192BattleBtn{background:linear-gradient(180deg,#ff3f85,#b60052)!important;color:white!important;border:2px solid white!important;border-radius:12px!important;padding:9px 12px!important;font-size:12px!important;box-shadow:0 4px 0 rgba(0,0,0,.32)!important;margin-left:8px!important;white-space:nowrap}@media(max-width:700px){.v192Mod{grid-template-columns:1fr;text-align:center}.v192Pills{justify-content:center}.v192BattleBtn{margin:8px 0 0!important;width:100%}}`; document.head.appendChild(st); }
+  }
+  function modHtml(m){return `<div class="v192Mod"><div class="v192ModIcon">${esc(m.icon)}</div><div><div class="v192Kicker">Today&apos;s Battle Modifier</div><div class="v192ModName">${esc(m.name)}</div><div class="v192Pills">${(m.lines||[]).map(x=>`<span class="v192Pill">${esc(x)}</span>`).join("")}</div></div></div>`;}
+  function render(raw,metric){
+    ensureCss(); const content=document.getElementById("leaderboardContent"); if(!content)return;
+    metric=metric||window.currentLeaderboardTab||"battleRating";
+    const all=normaliseRows(raw), list=dedupeRows(all).sort((a,b)=>valueFor(b,metric)-valueFor(a,metric));
+    cleanupDuplicates(all,list);
+    const mod=todayModifier(list); window.driverMonTodayModifier=mod;
+    const myId=stableId(), myName=norm(localName());
+    content.innerHTML=modHtml(mod)+(list.length?list.map((r,i)=>{
+      const id=safe(r.id), name=esc(r.name||r.username||"Player"), icon=esc(r.icon||r.avatar||"");
+      const cards=cardCount(r), home=esc(r.homeRegion||r.region||""), rating=num(r.battleRating,1000);
+      const isMe=id===myId || (myName && norm(r.name||r.username)===myName);
+      const locked=battled(id), disabled=isMe||locked;
+      const img = icon ? `<img class="leaderAvatarClickV182" data-player-id="${esc(id)}" src="${icon}" alt="${name}" title="Tap to view ${name}'s cards" style="width:52px;height:52px;border-radius:50%;object-fit:cover;border:3px solid white;margin-right:8px;cursor:pointer;background:#10234e;">` : `<div class="leaderAvatarClickV182" data-player-id="${esc(id)}" title="Tap to view ${name}'s cards" style="width:52px;height:52px;border-radius:50%;border:3px solid white;margin-right:8px;cursor:pointer;background:#10234e;display:flex;align-items:center;justify-content:center;font-size:22px;">🚗</div>`;
+      return `<div class="leaderEntry ${i===0?'goldLeader':i===1?'silverLeader':i===2?'bronzeLeader':''}"><div class="leaderRank">#${i+1}</div>${img}<div class="leaderMain"><div class="leaderName">${name}${isMe?' <span style="font-size:11px;color:#ffdf38;">YOU</span>':''}</div><div class="leaderMeta">${home?`Home: ${home} • `:""}${cards} public cards • Battle Rating ${rating}<br><span style="color:#ffdf38;font-weight:1000;">Tap picture to view cards</span></div></div><button class="v192BattleBtn" data-battle-id="${esc(id)}" ${disabled?'disabled style="opacity:.45;"':''}>${locked?'Battled Today':'⚔ Battle'}</button><div class="leaderScore"><div class="leaderScoreValue">${Number(valueFor(r,metric)).toLocaleString()}</div><div class="leaderScoreLabel">${esc(labelFor(metric))}</div></div></div>`;
+    }).join(""):`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">No players yet</div><div class="leaderMeta">No public Firebase players were found.</div></div></div>`);
+  }
+  function show(metric){
+    ensureCss(); window.currentLeaderboardTab=metric||window.currentLeaderboardTab||"battleRating";
+    const content=document.getElementById("leaderboardContent"); if(content) content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Loading battles...</div><div class="leaderMeta">Reading Firebase players safely.</div></div></div>`;
+    const read=(typeof tradeDb!=="undefined"&&tradeDb)?tradeDb.ref(LB_PATH).once("value").then(s=>s.val()||{}):Promise.resolve({});
+    read.then(raw=>render(raw,window.currentLeaderboardTab)).catch(err=>{ if(content) content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Leaderboard could not load</div><div class="leaderMeta">${esc(err&&err.message?err.message:err)}</div></div></div>`; });
+  }
+  window.showLeaderboardTab=show;
+  window.openLeaderboard=function(){ ensureCss(); const overlay=document.getElementById("leaderboardOverlay"); if(overlay) overlay.style.display="block"; show(window.currentLeaderboardTab||"battleRating"); };
+  document.addEventListener("click",function(e){ const b=e.target&&e.target.closest?e.target.closest(".v192BattleBtn"):null; if(b&&b.dataset&&b.dataset.battleId){ e.preventDefault(); e.stopPropagation(); if(!b.disabled && typeof window.startDriverMonBattle==="function") window.startDriverMonBattle(b.dataset.battleId); } }, true);
+})();
+</script>
+
 </body>
 </html>
 
