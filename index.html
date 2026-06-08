@@ -9994,7 +9994,7 @@ img[alt="DriverDex"]{
       publicCollection:cards,
       fullCollection:rowFullCollection(),
       updatedAt:Date.now(),
-      savedBy:"v211"
+      savedBy:"v212"
     };
   }
   function rowQuality(r){
@@ -10026,7 +10026,7 @@ img[alt="DriverDex"]{
       .catch(e=>{ console.warn("v204 publish failed",e); return row; });
   }
 
-  /* v211: merge Firebase copy back into this device, de-dupe cards, and preserve local card face images. */
+  /* v210: merge Firebase copy back into this device before publishing, so a fresh card is not overwritten by an older local save on refresh. */
   function cloneDriverForFirebase(d){
     const out=Object.assign({}, d||{});
     out.face = localFace(d);
@@ -10034,7 +10034,6 @@ img[alt="DriverDex"]{
     return out;
   }
   function rowFullCollection(){
-    dedupeLocalDrivers();
     return driversNow().filter(Boolean).map(cloneDriverForFirebase).slice(0,240);
   }
   function inflateFirebaseDriver(x){
@@ -10062,112 +10061,129 @@ img[alt="DriverDex"]{
     d.manualRarity = d.manualRarity || d.rarity || "Auto";
     return d;
   }
-  function dataFace(d){
-    try{ const f=localFace(d); if(String(f||"").startsWith("data:image")) return String(f); }catch(e){}
-    for(const k of ["face","faceImage","image","imgData","imgSrc","photo","imageData","src"]){
+  /* v212: conservative Firebase merge. Do NOT merge by name alone.
+     v210 successfully persisted new cards, but could duplicate lightweight Firebase rows.
+     v211 de-duped too aggressively and could remove legit cards. This version only
+     merges when identity is strong: uid, image fingerprint, or full stats signature. */
+  function faceFromAny(d){
+    try{ const f=localFace(d); if(f) return String(f); }catch(e){}
+    for(const k of ["face","faceImage","image","imgData","imageData","photo","src"]){
       const v=String(d&&d[k]||"");
-      if(v.startsWith("data:image")) return v;
+      if(v.indexOf("data:image")===0) return v;
     }
     return "";
   }
-  function cardKeys(d){
+  function faceFingerprint(d){
+    const f=faceFromAny(d);
+    if(!f) return "";
+    return "face:" + f.length + ":" + f.slice(0,80) + ":" + f.slice(-80);
+  }
+  function scoreForMerge(d){
+    try{ const c=calcCard(d); return num(c && (c.score||c.power), num(d && (d.score||d.power),0)); }catch(e){}
+    return num(d && (d.score||d.power),0);
+  }
+  function levelForMerge(d){
+    try{ const c=calcCard(d); return String((c && c.level) || d.level || d.nameRank || ""); }catch(e){}
+    return String(d && (d.level || d.nameRank) || "");
+  }
+  function strongMergeKeys(d){
     const keys=[];
     if(!d) return keys;
-    const uid=safe(d.uid||d.id||d.cardId||"");
-    if(uid && uid!=="player") keys.push("uid:"+uid);
-    const nm=norm(d.name||d.driverName||d.title||"");
-    const reg=norm(d.region||d.homeRegion||d.area||d.location||"");
-    const typ=norm(d.type||d.element||"");
-    const pow=String(num(d.power||d.score||d.powerScore,0));
-    const lvl=String(num(d.level||d.rankLevel||d.nameRank,0));
-    if(nm&&reg&&typ) keys.push("nrt:"+safe(nm+"_"+reg+"_"+typ));
-    if(nm&&reg&&pow) keys.push("nrp:"+safe(nm+"_"+reg+"_"+pow));
-    if(nm&&reg) keys.push("nr:"+safe(nm+"_"+reg));
-    if(nm&&pow&&lvl) keys.push("npl:"+safe(nm+"_"+pow+"_"+lvl));
-    return Array.from(new Set(keys));
+    const uid=String(d.uid||d.id||d.cardId||"").trim();
+    // Exact created card uid is strong. Ignore generated fb_ public-row ids as sole identity.
+    if(uid && !/^fb_/i.test(uid)) keys.push("uid:"+safe(uid));
+    const k=String(d.key||d.dexKey||"").trim();
+    if(k) keys.push("key:"+safe(k));
+    const fp=faceFingerprint(d); if(fp) keys.push(fp);
+    const name=norm(d.name||d.driverName||d.title);
+    const reg=norm(d.region||d.homeRegion||d.area||d.location);
+    const del=String(d.deliveries||"");
+    const sat=String(d.satisfaction||"");
+    const comp=String(d.compliments||"");
+    const since=norm(d.since||"");
+    // Full raw card signature: safe for duplicate screenshots/cards, not just same driver name.
+    if(name && (del || sat || comp || since)) keys.push("raw:"+safe([name,reg,del,sat,comp,since].join("|")));
+    const score=scoreForMerge(d);
+    const lvl=levelForMerge(d);
+    const rar=norm(d.rarity||d.manualRarity||d.rank||"");
+    // Public card signature: only when it has enough data to be reasonably unique.
+    if(name && reg && score) keys.push("pub:"+safe([name,reg,score,lvl,rar].join("|")));
+    return Array.from(new Set(keys.filter(Boolean)));
   }
-  function cardQuality(d){
-    let q=0;
-    if(dataFace(d)) q+=1000000000;
-    if(d&&d.img!==undefined&&d.img!==null) q+=1000000;
-    q+=Object.keys(d||{}).filter(k=>d[k]!==undefined&&d[k]!==null&&d[k]!=="").length*100;
-    q+=num(d&&d.power||d&&d.score,0);
-    q+=num(d&&d.level,0);
-    return q;
-  }
-  function mergeCardData(existing, incoming){
-    if(!existing) return incoming;
-    if(!incoming) return existing;
-    const keepFace=dataFace(existing), inFace=dataFace(incoming);
-    const base = cardQuality(incoming)>cardQuality(existing) ? Object.assign({}, incoming, existing) : Object.assign({}, existing);
-    Object.keys(incoming).forEach(k=>{
-      const cur=base[k];
-      const val=incoming[k];
-      if((cur===undefined||cur===null||cur==="") && val!==undefined && val!==null && val!=="") base[k]=val;
+  function mergePreferComplete(local, remote){
+    if(!local) return remote;
+    if(!remote) return local;
+    const out=Object.assign({}, remote, local); // local wins by default
+    // Fill blank local fields from remote.
+    Object.keys(remote||{}).forEach(k=>{
+      if(out[k]===undefined || out[k]===null || out[k]==="") out[k]=remote[k];
     });
-    // Never let a Firebase/public copy with no face overwrite a local copy with a real face.
-    if(keepFace && !inFace){
-      base.img=existing.img;
-      ["face","faceImage","image","imgData","imgSrc","photo","imageData","src"].forEach(k=>{ if(existing[k]) base[k]=existing[k]; });
+    // Preserve or import image. Prefer existing local image, otherwise attach remote image.
+    const localFace=faceFromAny(local);
+    const remoteFace=faceFromAny(remote);
+    if(!localFace && remoteFace){
+      try{
+        const imgs=(typeof faceImages!=="undefined"&&Array.isArray(faceImages))?faceImages:(Array.isArray(window.faceImages)?window.faceImages:null);
+        if(imgs){
+          let idx=imgs.indexOf(remoteFace);
+          if(idx<0){ imgs.push(remoteFace); idx=imgs.length-1; }
+          out.img=idx;
+        }
+      }catch(e){}
     }
-    return base;
+    return out;
   }
-  function dedupeLocalDrivers(){
+  function dedupeExactOnly(){
     const arr=driversNow();
     if(!Array.isArray(arr) || arr.length<2) return false;
     const keyToIndex=new Map();
     const out=[];
     let changed=false;
     arr.forEach(card=>{
-      const keys=cardKeys(card);
+      const keys=strongMergeKeys(card);
       let idx=-1;
       for(const k of keys){ if(keyToIndex.has(k)){ idx=keyToIndex.get(k); break; } }
       if(idx<0){
         idx=out.length; out.push(card); keys.forEach(k=>keyToIndex.set(k,idx));
       }else{
-        out[idx]=mergeCardData(out[idx], card);
-        keys.concat(cardKeys(out[idx])).forEach(k=>keyToIndex.set(k,idx));
+        out[idx]=mergePreferComplete(out[idx], card);
+        strongMergeKeys(out[idx]).concat(keys).forEach(k=>keyToIndex.set(k,idx));
         changed=true;
       }
     });
-    if(changed){
-      arr.splice(0, arr.length, ...out);
-      try{ if(typeof nextUid!=="undefined") nextUid=Math.max(Number(nextUid)||21, arr.length+21); }catch(e){}
-    }
+    if(changed) arr.splice(0, arr.length, ...out);
     return changed;
   }
   function mergeRemoteDrivers(remoteList){
     const arr=driversNow();
     if(!Array.isArray(arr) || !Array.isArray(remoteList) || !remoteList.length) return false;
-    let changed=dedupeLocalDrivers();
+    let changed=dedupeExactOnly();
     const keyToIndex=new Map();
-    arr.forEach((card,i)=>cardKeys(card).forEach(k=>keyToIndex.set(k,i)));
+    arr.forEach((card,i)=>strongMergeKeys(card).forEach(k=>keyToIndex.set(k,i)));
     let added=0, merged=0;
     remoteList.forEach(raw=>{
       const d=inflateFirebaseDriver(raw);
       if(!d) return;
-      const keys=cardKeys(d);
+      const keys=strongMergeKeys(d);
       let idx=-1;
       for(const k of keys){ if(keyToIndex.has(k)){ idx=keyToIndex.get(k); break; } }
       if(idx>=0){
-        const before=JSON.stringify([dataFace(arr[idx])?1:0,Object.keys(arr[idx]||{}).length]);
-        arr[idx]=mergeCardData(arr[idx], d);
-        cardKeys(arr[idx]).concat(keys).forEach(k=>keyToIndex.set(k,idx));
-        const after=JSON.stringify([dataFace(arr[idx])?1:0,Object.keys(arr[idx]||{}).length]);
-        if(before!==after){ changed=true; merged++; }
+        arr[idx]=mergePreferComplete(arr[idx], d);
+        strongMergeKeys(arr[idx]).concat(keys).forEach(k=>keyToIndex.set(k,idx));
+        changed=true; merged++;
         return;
       }
       arr.push(d);
       const newIdx=arr.length-1;
-      keys.forEach(k=>keyToIndex.set(k,newIdx));
+      strongMergeKeys(d).forEach(k=>keyToIndex.set(k,newIdx));
       added++; changed=true;
     });
     if(changed){
-      dedupeLocalDrivers();
+      dedupeExactOnly();
       try{ if(typeof nextUid!=="undefined") nextUid=Math.max(Number(nextUid)||21, arr.length+21); }catch(e){}
       robustSaveCollection();
       try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
-      console.log("v211 merged Firebase cards. added:", added, "merged:", merged);
+      console.log("v212 conservative Firebase merge. added:", added, "merged:", merged);
       return true;
     }
     return false;
@@ -10190,7 +10206,6 @@ img[alt="DriverDex"]{
   window.drivermonForceSaveCollection=robustSaveCollection;
   window.addEventListener("load", function(){
     restoreBackupIfNeeded();
-    try{ if(dedupeLocalDrivers()){ robustSaveCollection(); if(typeof renderCards==="function") renderCards(); } }catch(e){}
     mergeFirebaseBeforePublish().then(()=>{
       robustSaveCollection();
       return publishCanonicalPlayer();
