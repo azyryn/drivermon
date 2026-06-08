@@ -7340,177 +7340,138 @@ window.addEventListener("DOMContentLoaded", function(){
 
 
 
-<!-- v206: compact card persistence fix - no full screenshot storage -->
+<!-- v207: DIRECT compact card persistence fix - saves new cards without oversized full screenshots -->
 <script>
 (function(){
   const COLLECTION_KEY = "drivermon_collection_v1";
   const BACKUP_KEY = "drivermon_collection_v1_backup";
-  const COMPACT_KEY = "drivermon_collection_v206_compact";
+  let lastSavedSignature = "";
 
-  function arrDrivers(){
+  function getDrivers(){
     try{ if(typeof drivers !== "undefined" && Array.isArray(drivers)) return drivers; }catch(e){}
     try{ if(Array.isArray(window.drivers)) return window.drivers; }catch(e){}
     return [];
   }
-  function arrFace(){
+  function getFaces(){
     try{ if(typeof faceImages !== "undefined" && Array.isArray(faceImages)) return faceImages; }catch(e){}
     try{ if(Array.isArray(window.faceImages)) return window.faceImages; }catch(e){}
-    return [];
-  }
-  function arrFull(){
-    try{ if(typeof fullImages !== "undefined" && Array.isArray(fullImages)) return fullImages; }catch(e){}
-    try{ if(Array.isArray(window.fullImages)) return window.fullImages; }catch(e){}
     return [];
   }
   function getNextUid(){
     try{ if(typeof nextUid !== "undefined") return nextUid; }catch(e){}
     return window.nextUid || null;
   }
-  function setNextUid(v){
-    try{ if(typeof nextUid !== "undefined" && v) nextUid = Math.max(Number(v)||nextUid||21,21); }catch(e){}
-    try{ if(v) window.nextUid = Math.max(Number(v)||window.nextUid||21,21); }catch(e){}
-  }
-  function log(){ try{ console.log.apply(console, arguments); }catch(e){} }
-
-  function buildCompactPayload(){
-    const oldFaces = arrFace();
-    const newFaces = [];
-    const imageMap = new Map();
-    const compactDrivers = arrDrivers().map(function(d){
-      const copy = Object.assign({}, d || {});
-      let imgData = "";
-      if(copy && copy.img !== undefined && copy.img !== null && oldFaces[copy.img]) imgData = oldFaces[copy.img];
-      if(!imgData){
-        for(const k of ["face","faceData","faceImage","imageData","imgData","photo"]){
-          if(typeof copy[k] === "string" && copy[k].startsWith("data:image")){ imgData = copy[k]; break; }
-        }
-      }
-      if(imgData){
-        if(!imageMap.has(imgData)){
-          imageMap.set(imgData, newFaces.length);
-          newFaces.push(imgData);
-        }
-        copy.img = imageMap.get(imgData);
-      }
-      return copy;
-    });
-    return {
-      drivers: compactDrivers,
-      faceImages: newFaces,
+  function makePayload(includeImages){
+    const ds = getDrivers().map(d => Object.assign({}, d));
+    const payload = {
+      drivers: ds,
+      faceImages: includeImages ? getFaces().slice() : [],
+      // Never save full screenshots here. They are too large and can silently break localStorage saves.
       fullImages: [],
       nextUid: getNextUid(),
       savedAt: new Date().toISOString(),
-      compact: true,
-      version: 206
+      compactSave: true
     };
+    return payload;
   }
-
-  function writePayload(payload){
-    const txt = JSON.stringify(payload);
+  function signature(){
     try{
-      localStorage.setItem(COLLECTION_KEY, txt);
-      localStorage.setItem(BACKUP_KEY, txt);
-      localStorage.setItem(COMPACT_KEY, txt);
-      log("DriverMon collection saved compact:", payload.drivers.length, "cards", Math.round(txt.length/1024)+"KB");
-      return true;
-    }catch(e){
-      console.warn("Compact collection save failed", e);
+      return JSON.stringify(getDrivers().map(d => [d && d.uid, d && d.name, d && d.deliveries, d && d.region, d && d.img]).slice(-500));
+    }catch(e){ return String(Date.now()); }
+  }
+
+  window.saveCollection = function(){
+    const sig = signature();
+    try{
+      let payload = makePayload(true);
       try{
-        // Last resort: keep card data even if images are too large.
-        const noImages = Object.assign({}, payload, {faceImages:[], fullImages:[], imageStripped:true});
-        const small = JSON.stringify(noImages);
-        localStorage.setItem(COLLECTION_KEY, small);
-        localStorage.setItem(BACKUP_KEY, small);
-        localStorage.setItem(COMPACT_KEY, small);
-        console.warn("Saved card data without images because browser storage was full.");
-        return true;
-      }catch(e2){
-        console.error("DriverMon collection could not be saved", e2);
-        return false;
+        localStorage.setItem(COLLECTION_KEY, JSON.stringify(payload));
+        localStorage.setItem(BACKUP_KEY, JSON.stringify(payload));
+      }catch(imageErr){
+        // If images are too large, save the cards anyway. Better saved cards without faces than disappearing cards.
+        payload = makePayload(false);
+        localStorage.setItem(COLLECTION_KEY, JSON.stringify(payload));
+        localStorage.setItem(BACKUP_KEY, JSON.stringify(payload));
+        console.warn("DriverMon saved card data without images because browser storage was full.", imageErr);
       }
+      lastSavedSignature = sig;
+      console.log("DriverMon collection saved:", payload.drivers.length, "cards");
+      try{ if(typeof publishCanonicalPlayer === "function") setTimeout(publishCanonicalPlayer, 250); }catch(e){}
+      try{ if(typeof publishPlayerStats === "function") setTimeout(publishPlayerStats, 350); }catch(e){}
+      return payload;
+    }catch(err){
+      console.error("DriverMon compact save failed", err);
     }
+  };
+
+  function forceSaveSoon(){
+    setTimeout(()=>{ try{ window.saveCollection(); }catch(e){} }, 50);
+    setTimeout(()=>{ try{ window.saveCollection(); }catch(e){} }, 500);
   }
 
-  function compactSave(){
-    return writePayload(buildCompactPayload());
-  }
-
-  function loadFromRaw(raw){
-    if(!raw) return false;
-    const payload = JSON.parse(raw);
-    if(!payload || !Array.isArray(payload.drivers)) return false;
-    const ds = arrDrivers();
-    if(Array.isArray(ds)) ds.splice(0, ds.length, ...payload.drivers);
-    const fs = arrFace();
-    if(Array.isArray(fs)) fs.splice(0, fs.length, ...((Array.isArray(payload.faceImages) ? payload.faceImages : [])));
-    const full = arrFull();
-    if(Array.isArray(full)) full.splice(0, full.length);
-    setNextUid(payload.nextUid);
-    log("DriverMon collection loaded compact:", payload.drivers.length, "cards");
-    return true;
-  }
-
-  function compactLoad(){
-    const keys = [COLLECTION_KEY, COMPACT_KEY, BACKUP_KEY];
-    let best = null, bestCount = -1;
-    for(const k of keys){
-      try{
-        const raw = localStorage.getItem(k);
-        if(!raw) continue;
-        const p = JSON.parse(raw);
-        const count = p && Array.isArray(p.drivers) ? p.drivers.length : -1;
-        if(count > bestCount){ best = raw; bestCount = count; }
-      }catch(e){}
+  // Wrap the actual creation/edit functions, but also listen to the button in case inline handlers bypass wrappers.
+  try{
+    const oldAdd = window.addDriverMon;
+    if(typeof oldAdd === "function"){
+      window.addDriverMon = function(){
+        const result = oldAdd.apply(this, arguments);
+        forceSaveSoon();
+        return result;
+      };
     }
-    if(!best) return false;
-    try{ return loadFromRaw(best); }catch(e){ console.warn("Compact load failed", e); return false; }
-  }
+  }catch(e){}
+  try{
+    const oldUpdate = window.updateDriverMon;
+    if(typeof oldUpdate === "function"){
+      window.updateDriverMon = function(){
+        const result = oldUpdate.apply(this, arguments);
+        forceSaveSoon();
+        return result;
+      };
+    }
+  }catch(e){}
+  try{
+    const oldSaveDriver = window.saveDriverMon;
+    if(typeof oldSaveDriver === "function"){
+      window.saveDriverMon = function(){
+        const result = oldSaveDriver.apply(this, arguments);
+        forceSaveSoon();
+        return result;
+      };
+    }
+  }catch(e){}
 
-  // Replace all older save/load routines with the compact version.
-  window.saveCollection = compactSave;
-  window.loadCollectionIfSaved = compactLoad;
-  window.drivermonForceSaveCollection = compactSave;
-
-  // Wrap create/edit/save flows so the compact save runs immediately after a card changes.
-  const oldAdd = window.addDriverMon;
-  if(typeof oldAdd === "function"){
-    window.addDriverMon = function(){
-      const before = arrDrivers().length;
-      const result = oldAdd.apply(this, arguments);
-      const after = arrDrivers().length;
-      compactSave();
-      try{ if(typeof publishCollectionToDriverDex === "function") publishCollectionToDriverDex(); }catch(e){}
-      try{ if(typeof publishPublicPlayerCollection === "function") setTimeout(publishPublicPlayerCollection, 250); }catch(e){}
-      log("addDriverMon save check:", before, "→", after);
-      return result;
-    };
-  }
-  const oldUpdate = window.updateDriverMon;
-  if(typeof oldUpdate === "function"){
-    window.updateDriverMon = function(){
-      const result = oldUpdate.apply(this, arguments);
-      compactSave();
-      try{ if(typeof publishCollectionToDriverDex === "function") publishCollectionToDriverDex(); }catch(e){}
-      try{ if(typeof publishPublicPlayerCollection === "function") setTimeout(publishPublicPlayerCollection, 250); }catch(e){}
-      return result;
-    };
-  }
-  const oldSaveDriver = window.saveDriverMon;
-  if(typeof oldSaveDriver === "function"){
-    window.saveDriverMon = function(){
-      const result = oldSaveDriver.apply(this, arguments);
-      compactSave();
-      try{ if(typeof renderCards === "function") renderCards(); }catch(e){}
-      return result;
-    };
-  }
-
-  // Load the most complete saved collection as early as possible.
   document.addEventListener("DOMContentLoaded", function(){
-    compactLoad();
-    try{ if(typeof renderCards === "function") renderCards(); }catch(e){}
+    const btn = document.getElementById("saveButton");
+    if(btn){
+      btn.addEventListener("click", function(){ forceSaveSoon(); }, true);
+      btn.addEventListener("click", function(){ forceSaveSoon(); }, false);
+    }
+    // Repair load from backup if main save is missing cards.
+    try{
+      const main = JSON.parse(localStorage.getItem(COLLECTION_KEY) || "null");
+      const bak = JSON.parse(localStorage.getItem(BACKUP_KEY) || "null");
+      const mainCount = main && Array.isArray(main.drivers) ? main.drivers.length : 0;
+      const bakCount = bak && Array.isArray(bak.drivers) ? bak.drivers.length : 0;
+      if(bakCount > mainCount){
+        localStorage.setItem(COLLECTION_KEY, JSON.stringify(bak));
+        const arr = getDrivers();
+        if(Array.isArray(arr)) arr.splice(0, arr.length, ...bak.drivers);
+        const faces = getFaces();
+        if(Array.isArray(faces) && Array.isArray(bak.faceImages)) faces.splice(0, faces.length, ...bak.faceImages);
+        try{ if(typeof renderCards === "function") renderCards(); }catch(e){}
+      }
+    }catch(e){}
   });
-  window.addEventListener("beforeunload", compactSave);
+
+  // Last resort: if the collection changes, save it. This catches any old path that mutates drivers directly.
+  setInterval(function(){
+    const sig = signature();
+    if(sig && sig !== lastSavedSignature){
+      try{ window.saveCollection(); }catch(e){}
+    }
+  }, 1500);
+  window.addEventListener("beforeunload", function(){ try{ window.saveCollection(); }catch(e){} });
 })();
 </script>
 
