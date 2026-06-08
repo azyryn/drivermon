@@ -9210,9 +9210,15 @@ img[alt="DriverDex"]{
     return String(r||"").trim();
   }
   function getId(){
-    let id=""; try{ id=localStorage.getItem(PLAYER_ID_KEY) || localStorage.getItem("drivermonPlayerId_v177") || localStorage.getItem("drivermonPlayerId") || localStorage.getItem("playerId") || ""; }catch(e){}
-    if(!id) id="dm_"+Math.random().toString(36).slice(2,10)+"_"+Date.now().toString(36);
-    id=safe(id); try{ localStorage.setItem(PLAYER_ID_KEY,id); localStorage.setItem("drivermonPlayerId",id); localStorage.setItem("drivermonPlayerId_v177",id); }catch(e){}
+    // Stable name-based ID so a refresh does not create a new Firebase player row.
+    let id="";
+    try{
+      const n = norm(getName());
+      if(n && n!=="player" && n!=="guest") id = "dm_" + safe(n);
+      if(!id) id=localStorage.getItem(PLAYER_ID_KEY) || localStorage.getItem("drivermonPlayerId_v177") || localStorage.getItem("drivermonPlayerId") || localStorage.getItem("playerId") || "";
+    }catch(e){}
+    if(!id) id="dm_device_"+Math.random().toString(36).slice(2,10)+"_"+Date.now().toString(36);
+    id=safe(id); try{ localStorage.setItem(PLAYER_ID_KEY,id); localStorage.setItem("drivermonPlayerId",id); localStorage.setItem("drivermonPlayerId_v177",id); localStorage.setItem("drivermonDevicePlayerId",id); }catch(e){}
     return id;
   }
   function getRating(){ try{ return number(localStorage.getItem(RATING_KEY), 1000) || 1000; }catch(e){ return 1000; } }
@@ -9857,5 +9863,176 @@ img[alt="DriverDex"]{
       if(!b.disabled && typeof window.startDriverMonBattle==="function") window.startDriverMonBattle(b.dataset.battleId);
     }
   }, true);
+})();
+</script>
+
+
+<!-- v204: final duplicate-player cleanup + robust local card persistence -->
+<script>
+(function(){
+  const LB_PATH = "trades/__leaderboardPlayers";
+  const COLLECTION_KEY = "drivermon_collection_v1";
+  const COLLECTION_BACKUP_KEY = "drivermon_collection_v1_backup";
+  const PLAYER_KEYS = ["drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId","drivermonDevicePlayerId"];
+  function safe(s){ return String(s||"player").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90)||"player"; }
+  function norm(s){ return String(s||"").trim().toLowerCase(); }
+  function num(v,f){ v=Number(v); return Number.isFinite(v)?v:(f||0); }
+  function getProfile(){
+    try{ if(typeof getPlayerProfile==="function"){ const p=getPlayerProfile(); if(p&&typeof p==="object") return p; } }catch(e){}
+    const keys=["drivermon_player_profile_v1","driverMonPlayerProfile","playerProfile","drivermonProfile","drivermon_player_profile"];
+    for(const k of keys){ try{ const raw=localStorage.getItem(k); if(raw){ const p=JSON.parse(raw); if(p&&typeof p==="object") return p; } }catch(e){} }
+    return {};
+  }
+  function playerName(){ const p=getProfile(); return String(p.username||p.name||p.playerName||p.displayName||"Player").trim()||"Player"; }
+  function canonicalId(){
+    const n=norm(playerName()); let id="";
+    if(n && n!=="player" && n!=="guest") id="dm_"+safe(n);
+    if(!id){ for(const k of PLAYER_KEYS){ try{ const v=localStorage.getItem(k); if(v){ id=safe(v); break; } }catch(e){} } }
+    if(!id) id="dm_device_"+Math.random().toString(36).slice(2,10)+"_"+Date.now().toString(36);
+    try{ PLAYER_KEYS.forEach(k=>localStorage.setItem(k,id)); }catch(e){}
+    return id;
+  }
+  function driversNow(){ try{ if(Array.isArray(window.drivers)) return window.drivers; }catch(e){} try{ if(typeof drivers!=="undefined" && Array.isArray(drivers)) return drivers; }catch(e){} return []; }
+  function robustSaveCollection(){
+    try{
+      const payload={
+        drivers: driversNow(),
+        faceImages:(typeof faceImages!=="undefined"&&Array.isArray(faceImages))?faceImages:(Array.isArray(window.faceImages)?window.faceImages:[]),
+        fullImages:(typeof fullImages!=="undefined"&&Array.isArray(fullImages))?fullImages:(Array.isArray(window.fullImages)?window.fullImages:[]),
+        nextUid:(typeof nextUid!=="undefined")?nextUid:(window.nextUid||null),
+        savedAt:new Date().toISOString()
+      };
+      localStorage.setItem(COLLECTION_KEY, JSON.stringify(payload));
+      localStorage.setItem(COLLECTION_BACKUP_KEY, JSON.stringify(payload));
+      return payload;
+    }catch(e){ console.warn("v204 collection save failed", e); }
+  }
+  function restoreBackupIfNeeded(){
+    try{
+      const cur=JSON.parse(localStorage.getItem(COLLECTION_KEY)||"null");
+      const bak=JSON.parse(localStorage.getItem(COLLECTION_BACKUP_KEY)||"null");
+      const curCount=cur&&Array.isArray(cur.drivers)?cur.drivers.length:0;
+      const bakCount=bak&&Array.isArray(bak.drivers)?bak.drivers.length:0;
+      if(bakCount>curCount){
+        localStorage.setItem(COLLECTION_KEY, JSON.stringify(bak));
+        const arr=driversNow();
+        if(Array.isArray(arr)) arr.splice(0, arr.length, ...bak.drivers);
+        try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
+      }
+    }catch(e){}
+  }
+  const oldSave=window.saveCollection;
+  window.saveCollection=function(){
+    let r;
+    try{ if(typeof oldSave==="function") r=oldSave.apply(this, arguments); }catch(e){ console.warn("old saveCollection failed", e); }
+    robustSaveCollection();
+    setTimeout(()=>{ try{ publishCanonicalPlayer(); }catch(e){} }, 250);
+    return r;
+  };
+  // Watch for card changes in case an old add-card flow forgets to call saveCollection.
+  let lastSig="";
+  function watchSave(){
+    try{
+      const sig=JSON.stringify(driversNow().map(d=>[d&&d.uid,d&&d.name,d&&d.region,d&&d.power,d&&d.score,d&&d.shiny]).slice(-300));
+      if(sig!==lastSig){ lastSig=sig; robustSaveCollection(); }
+    }catch(e){}
+  }
+  function iconFromProfile(){ const p=getProfile(); for(const x of [p.avatar,p.avatarData,p.icon,p.profilePic,p.profileImage,p.image,p.photo]) if(String(x||"").startsWith("data:image")) return String(x); return ""; }
+  function localFace(d){
+    try{ if(typeof faceImages!=="undefined"&&Array.isArray(faceImages)&&d&&d.img!=null&&faceImages[d.img]) return faceImages[d.img]; }catch(e){}
+    try{ if(Array.isArray(window.faceImages)&&d&&d.img!=null&&window.faceImages[d.img]) return window.faceImages[d.img]; }catch(e){}
+    for(const k of ["face","faceImage","image","imgData","imgSrc","photo","imageData","src"]){ if(String(d&&d[k]||"").startsWith("data:image")) return String(d[k]); }
+    return "";
+  }
+  function calcCard(d){ try{ if(typeof calc==="function") return calc(d)||{}; }catch(e){} return {}; }
+  function cardRegion(d){ try{ if(typeof latestRegionForDriver==="function"){ const r=latestRegionForDriver(d); if(r&&r.region) return r.region; } }catch(e){} return d.region||d.homeRegion||d.area||d.location||"Unknown"; }
+  function cardType(d,c){ try{ if(typeof driverType==="function") return driverType(d,c)||{}; }catch(e){} return {name:d.type||d.element||"Type",icon:d.typeIcon||""}; }
+  function cardRarity(d,c){ try{ if(typeof rarity==="function") return rarity(Number(c.score||0), d.manualRarity); }catch(e){} return d.manualRarity||d.rarity||d.rank||"Bronze"; }
+  function publicCards(){
+    return driversNow().filter(Boolean).map(d=>{
+      const c=calcCard(d), t=cardType(d,c);
+      return {
+        uid:safe(d.uid||d.id||d.cardId||(norm(d.name||"card")+"_"+norm(cardRegion(d)))),
+        name:String(d.name||d.driverName||d.title||"Unnamed Driver"),
+        region:cardRegion(d),
+        rarity:cardRarity(d,c),
+        level:num(c.level||d.level||d.nameRank||d.rankLevel,1),
+        power:num(c.score||d.score||d.power||d.powerScore,0),
+        type:t.name||d.type||d.element||"Type",
+        typeIcon:t.icon||d.typeIcon||"",
+        shiny:!!d.shiny,
+        traded:!!d.traded,
+        face:localFace(d)
+      };
+    }).filter(c=>c.name&&c.power>0).slice(0,240);
+  }
+  function currentRow(){
+    const cards=publicCards(); const regions=new Set(cards.map(c=>c.region).filter(Boolean));
+    const stats={
+      cards:cards.length,
+      regions:regions.size,
+      shinies:cards.filter(c=>c.shiny).length,
+      power:cards.reduce((a,c)=>a+num(c.power,0),0),
+      legendary:cards.filter(c=>/legend|final|diamond/i.test(c.rarity)||num(c.power,0)>=2500).length,
+      trades:cards.filter(c=>c.traded).length
+    };
+    return {
+      id:canonicalId(),
+      playerId:canonicalId(),
+      name:playerName(),
+      username:playerName(),
+      icon:iconFromProfile(),
+      avatar:iconFromProfile(),
+      homeRegion:(getProfile().homeRegion||getProfile().region||localStorage.getItem("drivermonHomeRegion")||""),
+      region:(getProfile().homeRegion||getProfile().region||localStorage.getItem("drivermonHomeRegion")||""),
+      battleRating:num(localStorage.getItem("drivermonBattleRating_v185"),1000)||1000,
+      stats,
+      publicCollection:cards,
+      updatedAt:Date.now(),
+      savedBy:"v204"
+    };
+  }
+  function rowQuality(r){
+    const cards=Array.isArray(r&&r.publicCollection)?r.publicCollection.length:num(r&&r.stats&&r.stats.cards,0);
+    const hasImg=String((r&&r.icon)||(r&&r.avatar)||"").startsWith("data:image")?1:0;
+    const upd=Date.parse(r&&r.updatedAt)||num(r&&r.updatedAt,0)||0;
+    return cards*1e12 + hasImg*1e15 + num(r&&r.battleRating,1000)*1e6 + upd;
+  }
+  function cleanupDuplicateFirebaseRows(){
+    if(typeof tradeDb==="undefined"||!tradeDb) return Promise.resolve();
+    return tradeDb.ref(LB_PATH).once("value").then(snap=>{
+      const val=snap.val()||{}; const groups={};
+      Object.keys(val).forEach(k=>{ const r=val[k]||{}; const name=norm(r.name||r.username); if(!name||name==="player") return; (groups[name]=groups[name]||[]).push({key:k,row:r}); });
+      const ops=[];
+      Object.keys(groups).forEach(name=>{
+        const g=groups[name]; if(g.length<2) return;
+        let keep=g[0]; g.forEach(x=>{ if(rowQuality(x.row)>rowQuality(keep.row)) keep=x; });
+        g.forEach(x=>{ if(x.key!==keep.key) ops.push(tradeDb.ref(LB_PATH+"/"+safe(x.key)).remove()); });
+      });
+      return Promise.all(ops);
+    }).catch(e=>console.warn("v204 duplicate cleanup failed", e));
+  }
+  function publishCanonicalPlayer(){
+    if(typeof tradeDb==="undefined"||!tradeDb) return Promise.resolve(currentRow());
+    const row=currentRow();
+    return tradeDb.ref(LB_PATH+"/"+safe(row.id)).update(row)
+      .then(()=>cleanupDuplicateFirebaseRows())
+      .then(()=>row)
+      .catch(e=>{ console.warn("v204 publish failed",e); return row; });
+  }
+  window.publishPlayerStats=publishCanonicalPlayer;
+  window.publishPublicPlayerCollection=publishCanonicalPlayer;
+  window.drivermonCleanupDuplicatePlayers=cleanupDuplicateFirebaseRows;
+  window.drivermonForceSaveCollection=robustSaveCollection;
+  window.addEventListener("load", function(){
+    restoreBackupIfNeeded();
+    robustSaveCollection();
+    setTimeout(publishCanonicalPlayer, 800);
+    setTimeout(cleanupDuplicateFirebaseRows, 2200);
+    setTimeout(publishCanonicalPlayer, 4200);
+    setTimeout(cleanupDuplicateFirebaseRows, 8000);
+    setInterval(watchSave, 2500);
+  });
+  window.addEventListener("beforeunload", function(){ try{ robustSaveCollection(); }catch(e){} });
 })();
 </script>
