@@ -926,13 +926,9 @@ function addDriverMon(){
     img:faceImages.length-1
   });
 
-  // v214 real fix: persist immediately, before clearing the form or any later Firebase/leaderboard code runs.
-  if(typeof saveCollection === "function") saveCollection();
-  if(typeof publishPlayerStats === "function") setTimeout(()=>publishPlayerStats(), 50);
-  if(typeof publishPublicPlayerCollection === "function") setTimeout(()=>publishPublicPlayerCollection(), 100);
-
   clearCreator();
   renderCards();
+  try{ if(typeof window.dmSaveOwnedCollectionToFirebase === "function") window.dmSaveOwnedCollectionToFirebase("create"); }catch(e){ console.warn("Firebase collection save after create failed", e); }
 }
 
 function updateDriverMon(){
@@ -965,13 +961,9 @@ function updateDriverMon(){
     d.img = faceImages.length-1;
   }
 
-  // v214 real fix: persist edits immediately.
-  if(typeof saveCollection === "function") saveCollection();
-  if(typeof publishPlayerStats === "function") setTimeout(()=>publishPlayerStats(), 50);
-  if(typeof publishPublicPlayerCollection === "function") setTimeout(()=>publishPublicPlayerCollection(), 100);
-
   clearCreator();
   renderCards();
+  try{ if(typeof window.dmSaveOwnedCollectionToFirebase === "function") window.dmSaveOwnedCollectionToFirebase("edit"); }catch(e){ console.warn("Firebase collection save after edit failed", e); }
 }
 
 function editCard(uid){
@@ -1272,6 +1264,7 @@ function hardResetDriverMonCollection(){
 
     drivers.splice(0, drivers.length);
     renderCards();
+    try{ if(typeof window.dmClearOwnedCollectionInFirebase === "function") window.dmClearOwnedCollectionInFirebase(); }catch(e){}
   }catch(err){
     console.log("Reset failed", err);
   }
@@ -5552,9 +5545,7 @@ window.addEventListener("load", ()=>{
       const payload = {
         drivers: Array.isArray(window.drivers) ? window.drivers : (typeof drivers !== "undefined" ? drivers : []),
         faceImages: (typeof faceImages !== "undefined" && Array.isArray(faceImages)) ? faceImages : [],
-        // v214: do not store full screenshots; they can exceed browser storage and make the whole save fail.
-        // Use face images as the edit-preview fallback instead.
-        fullImages: (typeof faceImages !== "undefined" && Array.isArray(faceImages)) ? faceImages : [],
+        fullImages: (typeof fullImages !== "undefined" && Array.isArray(fullImages)) ? fullImages : [],
         nextUid: (typeof nextUid !== "undefined") ? nextUid : null,
         savedAt: new Date().toISOString()
       };
@@ -5580,12 +5571,8 @@ window.addEventListener("load", ()=>{
         faceImages.splice(0, faceImages.length, ...payload.faceImages);
       }
 
-      if(typeof fullImages !== "undefined" && Array.isArray(fullImages)){
-        if(Array.isArray(payload.fullImages) && payload.fullImages.length){
-          fullImages.splice(0, fullImages.length, ...payload.fullImages);
-        }else if(Array.isArray(payload.faceImages) && payload.faceImages.length){
-          fullImages.splice(0, fullImages.length, ...payload.faceImages);
-        }
+      if(typeof fullImages !== "undefined" && Array.isArray(fullImages) && Array.isArray(payload.fullImages) && payload.fullImages.length){
+        fullImages.splice(0, fullImages.length, ...payload.fullImages);
       }
 
       if(typeof nextUid !== "undefined" && payload.nextUid){
@@ -7351,6 +7338,143 @@ window.addEventListener("DOMContentLoaded", function(){
   window.addEventListener('load', applyWelcomePreference);
   setTimeout(applyWelcomePreference, 250);
   setTimeout(applyWelcomePreference, 1000);
+})();
+</script>
+
+
+
+<!-- v216: real Firebase-owned card collection persistence (single source of truth) -->
+<script>
+(function(){
+  const COLLECTION_ROOT = "playerCollections";
+  const LOCAL_KEY = "drivermon_collection_v1";
+  const PLAYER_KEYS = ["drivermonDevicePlayerId","drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId"];
+  let bootstrapping = true;
+  let lastSavedSignature = "";
+  function safeKey(v){ return String(v||"player").trim().replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90) || "player"; }
+  function readProfile(){
+    try{ if(typeof getPlayerProfile === "function"){ const p=getPlayerProfile(); if(p&&typeof p==="object") return p; } }catch(e){}
+    const keys=["drivermon_player_profile_v1","drivermonPlayerProfile","driverMonPlayerProfile","playerProfile","drivermonProfile","drivermon_player_profile"];
+    for(const k of keys){ try{ const raw=localStorage.getItem(k); if(raw){ const p=JSON.parse(raw); if(p&&typeof p==="object") return p; } }catch(e){} }
+    return {};
+  }
+  function playerName(){ const p=readProfile(); return String(p.username||p.name||p.playerName||p.displayName||"").trim(); }
+  function playerId(){
+    const name=playerName();
+    if(name) return "dm_" + safeKey(name.toLowerCase());
+    for(const k of PLAYER_KEYS){ try{ const v=localStorage.getItem(k); if(v) return safeKey(v); }catch(e){} }
+    const id="dm_device_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,8);
+    try{ localStorage.setItem("drivermonDevicePlayerId", id); }catch(e){}
+    return id;
+  }
+  function arrDrivers(){ try{ if(typeof drivers !== "undefined" && Array.isArray(drivers)) return drivers; }catch(e){} return []; }
+  function arrFaces(){ try{ if(typeof faceImages !== "undefined" && Array.isArray(faceImages)) return faceImages; }catch(e){} return []; }
+  function arrFulls(){ try{ if(typeof fullImages !== "undefined" && Array.isArray(fullImages)) return fullImages; }catch(e){} return []; }
+  function maxUidFromCards(cards){
+    let max=21;
+    (cards||[]).forEach(c=>{ const m=String(c&&c.uid||"").match(/(\d+)$/); if(m) max=Math.max(max, Number(m[1])+1); });
+    return max;
+  }
+  function compactDriver(d){
+    const copy=Object.assign({}, d||{});
+    // Do not embed images inside every card; images live in faceImages by index.
+    ["face","faceImage","image","imageData","imgData","imgSrc","photo","src","_tradeFaceImage","tradeFaceImage"].forEach(k=>{ delete copy[k]; });
+    if(!copy.uid) copy.uid="card_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,8);
+    return copy;
+  }
+  function collectionPayload(){
+    const ds=arrDrivers().map(compactDriver);
+    const faces=arrFaces().slice();
+    return {
+      version:216,
+      playerId:playerId(),
+      username:playerName() || "Player",
+      drivers:ds,
+      faceImages:faces,
+      // Keep fullImages out of Firebase; huge screenshots were the original save killer.
+      fullImages:[],
+      nextUid:(typeof nextUid !== "undefined" ? nextUid : maxUidFromCards(ds)),
+      updatedAt:Date.now(),
+      updatedIso:new Date().toISOString()
+    };
+  }
+  function applyCollection(payload){
+    if(!payload || !Array.isArray(payload.drivers)) return false;
+    const ds=payload.drivers.map(d=>Object.assign({}, d));
+    try{ if(typeof drivers !== "undefined" && Array.isArray(drivers)){ drivers.splice(0, drivers.length, ...ds); } }catch(e){}
+    try{ if(typeof faceImages !== "undefined" && Array.isArray(faceImages)){ faceImages.splice(0, faceImages.length, ...(Array.isArray(payload.faceImages)?payload.faceImages:[])); } }catch(e){}
+    try{ if(typeof fullImages !== "undefined" && Array.isArray(fullImages)){ fullImages.splice(0, fullImages.length, ...(Array.isArray(payload.fullImages)?payload.fullImages:[])); } }catch(e){}
+    try{ if(typeof nextUid !== "undefined"){ nextUid=Math.max(Number(payload.nextUid)||0, maxUidFromCards(ds), 21); } }catch(e){}
+    try{ localStorage.setItem(LOCAL_KEY, JSON.stringify(payload)); }catch(e){ console.warn("Local mirror save failed", e); }
+    try{ if(typeof renderCards === "function") renderCards(); }catch(e){}
+    return true;
+  }
+  function collectionRef(){
+    if(typeof tradeDb === "undefined" || !tradeDb) return null;
+    return tradeDb.ref(COLLECTION_ROOT + "/" + safeKey(playerId()));
+  }
+  async function saveOwnedCollection(reason){
+    if(bootstrapping && reason !== "initial-seed") return null;
+    const ref=collectionRef();
+    const payload=collectionPayload();
+    const sig=JSON.stringify([payload.drivers.length,payload.nextUid,payload.drivers.map(d=>[d.uid,d.name,d.img]).join("|")]);
+    if(sig===lastSavedSignature && reason!=="force") return payload;
+    lastSavedSignature=sig;
+    try{ localStorage.setItem(LOCAL_KEY, JSON.stringify(payload)); }catch(e){}
+    if(ref){
+      try{ await ref.set(payload); console.log("DriverMon collection saved to Firebase", reason, payload.drivers.length); }
+      catch(e){ console.warn("DriverMon Firebase collection save failed", e); }
+    }
+    try{ if(typeof window.publishPlayerStats === "function") setTimeout(()=>window.publishPlayerStats(), 250); }catch(e){}
+    return payload;
+  }
+  async function loadOwnedCollection(){
+    const ref=collectionRef();
+    let remote=null;
+    if(ref){
+      try{ const snap=await ref.once("value"); remote=snap.val(); }catch(e){ console.warn("DriverMon Firebase collection load failed", e); }
+    }
+    bootstrapping=false;
+    if(remote && Array.isArray(remote.drivers) && remote.drivers.length){
+      applyCollection(remote);
+      console.log("DriverMon collection loaded from Firebase", remote.drivers.length);
+      return remote;
+    }
+    // First time for this player: seed Firebase from the current on-screen collection/starter pack.
+    return saveOwnedCollection("initial-seed");
+  }
+  async function clearOwnedCollection(){
+    try{ localStorage.removeItem(LOCAL_KEY); }catch(e){}
+    const ref=collectionRef();
+    if(ref){ try{ await ref.remove(); }catch(e){ console.warn("Firebase collection clear failed", e); } }
+  }
+
+  window.dmLoadOwnedCollectionFromFirebase = loadOwnedCollection;
+  window.dmSaveOwnedCollectionToFirebase = saveOwnedCollection;
+  window.dmClearOwnedCollectionInFirebase = clearOwnedCollection;
+
+  const oldSaveCollection = window.saveCollection;
+  window.saveCollection = function(){
+    let r;
+    try{ if(typeof oldSaveCollection === "function") r=oldSaveCollection.apply(this, arguments); }catch(e){ console.warn("old saveCollection failed", e); }
+    try{ saveOwnedCollection("saveCollection"); }catch(e){}
+    return r;
+  };
+
+  const oldSaveDriverMon = window.saveDriverMon;
+  if(typeof oldSaveDriverMon === "function"){
+    window.saveDriverMon = function(){
+      const result=oldSaveDriverMon.apply(this, arguments);
+      try{ saveOwnedCollection("saveDriverMon"); }catch(e){}
+      return result;
+    };
+  }
+
+  window.addEventListener("DOMContentLoaded", function(){
+    // Let the older local starter/local loader run first, then replace with Firebase if present.
+    setTimeout(()=>{ loadOwnedCollection(); }, 350);
+  });
+  window.addEventListener("beforeunload", function(){ try{ saveOwnedCollection("beforeunload"); }catch(e){} });
 })();
 </script>
 
@@ -9914,8 +10038,7 @@ img[alt="DriverDex"]{
       const payload={
         drivers: driversNow(),
         faceImages:(typeof faceImages!=="undefined"&&Array.isArray(faceImages))?faceImages:(Array.isArray(window.faceImages)?window.faceImages:[]),
-        // v214: never save full screenshots here; they can blow localStorage quota.
-        fullImages:(typeof faceImages!=="undefined"&&Array.isArray(faceImages))?faceImages:(Array.isArray(window.faceImages)?window.faceImages:[]),
+        fullImages:(typeof fullImages!=="undefined"&&Array.isArray(fullImages))?fullImages:(Array.isArray(window.fullImages)?window.fullImages:[]),
         nextUid:(typeof nextUid!=="undefined")?nextUid:(window.nextUid||null),
         savedAt:new Date().toISOString()
       };
@@ -9934,10 +10057,6 @@ img[alt="DriverDex"]{
         localStorage.setItem(COLLECTION_KEY, JSON.stringify(bak));
         const arr=driversNow();
         if(Array.isArray(arr)) arr.splice(0, arr.length, ...bak.drivers);
-        try{
-          if(typeof faceImages!=="undefined" && Array.isArray(faceImages) && Array.isArray(bak.faceImages)) faceImages.splice(0, faceImages.length, ...bak.faceImages);
-          if(typeof fullImages!=="undefined" && Array.isArray(fullImages) && Array.isArray(bak.fullImages)) fullImages.splice(0, fullImages.length, ...bak.fullImages);
-        }catch(e){}
         try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
       }
     }catch(e){}
