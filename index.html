@@ -926,6 +926,14 @@ function addDriverMon(){
     img:faceImages.length-1
   });
 
+  try{
+    if(typeof saveCollection === "function") saveCollection();
+    else if(window.saveCollection) window.saveCollection();
+    console.log("DriverMon collection saved after add:", Array.isArray(drivers) ? drivers.length : "unknown");
+  }catch(saveErr){
+    console.warn("Could not save after adding card", saveErr);
+  }
+
   clearCreator();
   renderCards();
 }
@@ -958,6 +966,14 @@ function updateDriverMon(){
     fullImages.push(pendingFullImage);
     faceImages.push(pendingFaceImage);
     d.img = faceImages.length-1;
+  }
+
+  try{
+    if(typeof saveCollection === "function") saveCollection();
+    else if(window.saveCollection) window.saveCollection();
+    console.log("DriverMon collection saved after edit:", Array.isArray(drivers) ? drivers.length : "unknown");
+  }catch(saveErr){
+    console.warn("Could not save after editing card", saveErr);
   }
 
   clearCreator();
@@ -7335,6 +7351,46 @@ window.addEventListener("DOMContentLoaded", function(){
   window.addEventListener('load', applyWelcomePreference);
   setTimeout(applyWelcomePreference, 250);
   setTimeout(applyWelcomePreference, 1000);
+})();
+</script>
+
+
+
+<script>
+/* v205 direct card persistence fix: saves immediately after Create/Save Changes. */
+(function(){
+  function forceSaveDriverMonCollectionV205(){
+    try{
+      const payload = {
+        drivers: (typeof drivers !== "undefined" && Array.isArray(drivers)) ? drivers : [],
+        faceImages: (typeof faceImages !== "undefined" && Array.isArray(faceImages)) ? faceImages : [],
+        fullImages: (typeof fullImages !== "undefined" && Array.isArray(fullImages)) ? fullImages : [],
+        nextUid: (typeof nextUid !== "undefined") ? nextUid : null,
+        savedAt: new Date().toISOString(),
+        savedBy: "v205-force-save"
+      };
+      localStorage.setItem("drivermon_collection_v1", JSON.stringify(payload));
+      localStorage.setItem("drivermon_collection_backup_v205", JSON.stringify(payload));
+      if(typeof window.publishCurrentPlayer === "function") setTimeout(window.publishCurrentPlayer, 150);
+      if(typeof window.publishLeaderboardPlayer === "function") setTimeout(window.publishLeaderboardPlayer, 150);
+      if(typeof window.publishPublicPlayerCollection === "function") setTimeout(window.publishPublicPlayerCollection, 150);
+      console.log("v205 force saved collection", payload.drivers.length);
+    }catch(e){
+      console.warn("v205 force save failed", e);
+    }
+  }
+
+  const oldSaveDriverMon = window.saveDriverMon;
+  if(typeof oldSaveDriverMon === "function"){
+    window.saveDriverMon = function(){
+      const result = oldSaveDriverMon.apply(this, arguments);
+      setTimeout(forceSaveDriverMonCollectionV205, 50);
+      setTimeout(forceSaveDriverMonCollectionV205, 500);
+      return result;
+    };
+  }
+
+  window.forceSaveDriverMonCollectionV205 = forceSaveDriverMonCollectionV205;
 })();
 </script>
 
