@@ -7340,141 +7340,162 @@ window.addEventListener("DOMContentLoaded", function(){
 
 
 
-<!-- v207: DIRECT compact card persistence fix - saves new cards without oversized full screenshots -->
+<!-- v208: IndexedDB card persistence fix - keeps new cards after refresh even when localStorage is full -->
 <script>
 (function(){
-  const COLLECTION_KEY = "drivermon_collection_v1";
-  const BACKUP_KEY = "drivermon_collection_v1_backup";
-  let lastSavedSignature = "";
+  const DB_NAME = "DriverMonPersistentCollection_v208";
+  const STORE = "kv";
+  const KEY = "collection";
+  const LOCAL_KEY = "drivermon_collection_v1";
+  const LOCAL_MINI_KEY = "drivermon_collection_v208_mini";
 
-  function getDrivers(){
-    try{ if(typeof drivers !== "undefined" && Array.isArray(drivers)) return drivers; }catch(e){}
-    try{ if(Array.isArray(window.drivers)) return window.drivers; }catch(e){}
-    return [];
+  function log(){ try{ console.log.apply(console, ["[v208 save]"].concat([].slice.call(arguments))); }catch(e){} }
+  function getDrivers(){ try{ if(typeof drivers !== "undefined" && Array.isArray(drivers)) return drivers; }catch(e){} try{ if(Array.isArray(window.drivers)) return window.drivers; }catch(e){} return []; }
+  function getFaceImages(){ try{ if(typeof faceImages !== "undefined" && Array.isArray(faceImages)) return faceImages; }catch(e){} try{ if(Array.isArray(window.faceImages)) return window.faceImages; }catch(e){} return []; }
+  function getFullImages(){ try{ if(typeof fullImages !== "undefined" && Array.isArray(fullImages)) return fullImages; }catch(e){} try{ if(Array.isArray(window.fullImages)) return window.fullImages; }catch(e){} return []; }
+  function getNextUid(){ try{ if(typeof nextUid !== "undefined") return nextUid; }catch(e){} return window.nextUid || null; }
+  function setNextUid(v){ try{ if(typeof nextUid !== "undefined" && v) nextUid = Math.max(Number(v)||nextUid||21, 21); }catch(e){} try{ if(v) window.nextUid = Math.max(Number(v)||window.nextUid||21, 21); }catch(e){} }
+  function clone(obj){ return JSON.parse(JSON.stringify(obj)); }
+
+  function openDb(){
+    return new Promise((resolve,reject)=>{
+      if(!window.indexedDB){ reject(new Error("IndexedDB unavailable")); return; }
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = function(){ req.result.createObjectStore(STORE); };
+      req.onsuccess = function(){ resolve(req.result); };
+      req.onerror = function(){ reject(req.error || new Error("IndexedDB open failed")); };
+    });
   }
-  function getFaces(){
-    try{ if(typeof faceImages !== "undefined" && Array.isArray(faceImages)) return faceImages; }catch(e){}
-    try{ if(Array.isArray(window.faceImages)) return window.faceImages; }catch(e){}
-    return [];
+  function idbSet(value){
+    return openDb().then(db=>new Promise((resolve,reject)=>{
+      const tx = db.transaction(STORE, "readwrite");
+      tx.objectStore(STORE).put(value, KEY);
+      tx.oncomplete = function(){ db.close(); resolve(true); };
+      tx.onerror = function(){ const err = tx.error || new Error("IndexedDB write failed"); db.close(); reject(err); };
+    }));
   }
-  function getNextUid(){
-    try{ if(typeof nextUid !== "undefined") return nextUid; }catch(e){}
-    return window.nextUid || null;
+  function idbGet(){
+    return openDb().then(db=>new Promise((resolve,reject)=>{
+      const tx = db.transaction(STORE, "readonly");
+      const req = tx.objectStore(STORE).get(KEY);
+      req.onsuccess = function(){ resolve(req.result || null); };
+      req.onerror = function(){ reject(req.error || new Error("IndexedDB read failed")); };
+      tx.oncomplete = function(){ db.close(); };
+    }));
   }
-  function makePayload(includeImages){
-    const ds = getDrivers().map(d => Object.assign({}, d));
-    const payload = {
-      drivers: ds,
-      faceImages: includeImages ? getFaces().slice() : [],
-      // Never save full screenshots here. They are too large and can silently break localStorage saves.
-      fullImages: [],
-      nextUid: getNextUid(),
-      savedAt: new Date().toISOString(),
-      compactSave: true
-    };
+
+  function makePayload(){
+    const ds = clone(getDrivers());
+    const faces = clone(getFaceImages());
+    // Do NOT store full screenshots in the robust localStorage copy. IndexedDB can keep them if present,
+    // but fullImages is not required to show saved cards, and it is the usual reason localStorage fails.
+    const fulls = [];
+    return { drivers: ds, faceImages: faces, fullImages: fulls, nextUid: getNextUid(), savedAt: new Date().toISOString(), savedBy: "v208_indexeddb" };
+  }
+
+  function applyPayload(payload){
+    if(!payload || !Array.isArray(payload.drivers)) return false;
+    const arr = getDrivers();
+    arr.splice(0, arr.length, ...payload.drivers);
+    const faces = getFaceImages();
+    if(Array.isArray(payload.faceImages)) faces.splice(0, faces.length, ...payload.faceImages);
+    const fulls = getFullImages();
+    if(Array.isArray(payload.fullImages)) fulls.splice(0, fulls.length, ...payload.fullImages);
+    setNextUid(payload.nextUid);
+    try{ if(typeof renderCards === "function") renderCards(); }catch(e){}
+    try{ if(typeof publishPlayerStats === "function") setTimeout(publishPlayerStats, 400); }catch(e){}
+    try{ if(typeof publishPublicPlayerCollection === "function") setTimeout(publishPublicPlayerCollection, 650); }catch(e){}
+    return true;
+  }
+
+  function saveNow(reason){
+    const payload = makePayload();
+    try{
+      // Compact localStorage fallback. This intentionally does not include full screenshots.
+      localStorage.setItem(LOCAL_KEY, JSON.stringify(payload));
+      localStorage.setItem(LOCAL_MINI_KEY, JSON.stringify(payload));
+    }catch(e){ log("localStorage compact save failed, IndexedDB will still be used", e && e.name ? e.name : e); }
+    idbSet(payload).then(()=>log("saved", reason || "manual", payload.drivers.length+" cards"))
+      .catch(e=>log("IndexedDB save failed", e));
     return payload;
   }
-  function signature(){
-    try{
-      return JSON.stringify(getDrivers().map(d => [d && d.uid, d && d.name, d && d.deliveries, d && d.region, d && d.img]).slice(-500));
-    }catch(e){ return String(Date.now()); }
+
+  function loadBest(){
+    return idbGet().then(payload=>{
+      if(payload && Array.isArray(payload.drivers) && payload.drivers.length){
+        applyPayload(payload);
+        log("loaded from IndexedDB", payload.drivers.length+" cards");
+        return true;
+      }
+      try{
+        const raw = localStorage.getItem(LOCAL_MINI_KEY) || localStorage.getItem(LOCAL_KEY);
+        const local = raw ? JSON.parse(raw) : null;
+        if(local && Array.isArray(local.drivers) && local.drivers.length){
+          applyPayload(local);
+          idbSet(local).catch(()=>{});
+          log("loaded from localStorage fallback", local.drivers.length+" cards");
+          return true;
+        }
+      }catch(e){}
+      return false;
+    }).catch(e=>{ log("load failed", e); return false; });
   }
 
+  // Replace saveCollection with a version that still calls older publishers but persists through IndexedDB.
+  const previousSaveCollection = window.saveCollection;
   window.saveCollection = function(){
-    const sig = signature();
-    try{
-      let payload = makePayload(true);
-      try{
-        localStorage.setItem(COLLECTION_KEY, JSON.stringify(payload));
-        localStorage.setItem(BACKUP_KEY, JSON.stringify(payload));
-      }catch(imageErr){
-        // If images are too large, save the cards anyway. Better saved cards without faces than disappearing cards.
-        payload = makePayload(false);
-        localStorage.setItem(COLLECTION_KEY, JSON.stringify(payload));
-        localStorage.setItem(BACKUP_KEY, JSON.stringify(payload));
-        console.warn("DriverMon saved card data without images because browser storage was full.", imageErr);
-      }
-      lastSavedSignature = sig;
-      console.log("DriverMon collection saved:", payload.drivers.length, "cards");
-      try{ if(typeof publishCanonicalPlayer === "function") setTimeout(publishCanonicalPlayer, 250); }catch(e){}
-      try{ if(typeof publishPlayerStats === "function") setTimeout(publishPlayerStats, 350); }catch(e){}
-      return payload;
-    }catch(err){
-      console.error("DriverMon compact save failed", err);
-    }
+    let out;
+    try{ if(typeof previousSaveCollection === "function") out = previousSaveCollection.apply(this, arguments); }catch(e){ log("previous saveCollection failed", e); }
+    saveNow("saveCollection");
+    return out;
   };
 
-  function forceSaveSoon(){
-    setTimeout(()=>{ try{ window.saveCollection(); }catch(e){} }, 50);
-    setTimeout(()=>{ try{ window.saveCollection(); }catch(e){} }, 500);
+  // Wrap the actual Create/Edit button path.
+  const previousSaveDriverMon = window.saveDriverMon;
+  if(typeof previousSaveDriverMon === "function"){
+    window.saveDriverMon = function(){
+      const before = getDrivers().length;
+      const out = previousSaveDriverMon.apply(this, arguments);
+      setTimeout(()=>saveNow("saveDriverMon " + before + "→" + getDrivers().length), 80);
+      setTimeout(()=>saveNow("saveDriverMon delayed"), 800);
+      return out;
+    };
   }
 
-  // Wrap the actual creation/edit functions, but also listen to the button in case inline handlers bypass wrappers.
-  try{
-    const oldAdd = window.addDriverMon;
-    if(typeof oldAdd === "function"){
-      window.addDriverMon = function(){
-        const result = oldAdd.apply(this, arguments);
-        forceSaveSoon();
-        return result;
-      };
-    }
-  }catch(e){}
-  try{
-    const oldUpdate = window.updateDriverMon;
-    if(typeof oldUpdate === "function"){
-      window.updateDriverMon = function(){
-        const result = oldUpdate.apply(this, arguments);
-        forceSaveSoon();
-        return result;
-      };
-    }
-  }catch(e){}
-  try{
-    const oldSaveDriver = window.saveDriverMon;
-    if(typeof oldSaveDriver === "function"){
-      window.saveDriverMon = function(){
-        const result = oldSaveDriver.apply(this, arguments);
-        forceSaveSoon();
-        return result;
-      };
-    }
-  }catch(e){}
+  // Also wrap direct add/update calls in case another old script bypasses saveDriverMon.
+  const previousAddDriverMon = window.addDriverMon;
+  if(typeof previousAddDriverMon === "function"){
+    window.addDriverMon = function(){ const out = previousAddDriverMon.apply(this, arguments); setTimeout(()=>saveNow("addDriverMon"), 80); return out; };
+  }
+  const previousUpdateDriverMon = window.updateDriverMon;
+  if(typeof previousUpdateDriverMon === "function"){
+    window.updateDriverMon = function(){ const out = previousUpdateDriverMon.apply(this, arguments); setTimeout(()=>saveNow("updateDriverMon"), 80); return out; };
+  }
 
-  document.addEventListener("DOMContentLoaded", function(){
-    const btn = document.getElementById("saveButton");
-    if(btn){
-      btn.addEventListener("click", function(){ forceSaveSoon(); }, true);
-      btn.addEventListener("click", function(){ forceSaveSoon(); }, false);
-    }
-    // Repair load from backup if main save is missing cards.
-    try{
-      const main = JSON.parse(localStorage.getItem(COLLECTION_KEY) || "null");
-      const bak = JSON.parse(localStorage.getItem(BACKUP_KEY) || "null");
-      const mainCount = main && Array.isArray(main.drivers) ? main.drivers.length : 0;
-      const bakCount = bak && Array.isArray(bak.drivers) ? bak.drivers.length : 0;
-      if(bakCount > mainCount){
-        localStorage.setItem(COLLECTION_KEY, JSON.stringify(bak));
-        const arr = getDrivers();
-        if(Array.isArray(arr)) arr.splice(0, arr.length, ...bak.drivers);
-        const faces = getFaces();
-        if(Array.isArray(faces) && Array.isArray(bak.faceImages)) faces.splice(0, faces.length, ...bak.faceImages);
-        try{ if(typeof renderCards === "function") renderCards(); }catch(e){}
-      }
-    }catch(e){}
-  });
-
-  // Last resort: if the collection changes, save it. This catches any old path that mutates drivers directly.
-  setInterval(function(){
+  // Detect changes automatically as a last safety net.
+  let lastSig = "";
+  function signature(){
+    try{ return JSON.stringify(getDrivers().map(d=>[d&&d.uid,d&&d.name,d&&d.region,d&&d.deliveries,d&&d.satisfaction,d&&d.manualRarity,d&&d.img])); }catch(e){ return ""; }
+  }
+  function autosaveIfChanged(){
     const sig = signature();
-    if(sig && sig !== lastSavedSignature){
-      try{ window.saveCollection(); }catch(e){}
-    }
-  }, 1500);
-  window.addEventListener("beforeunload", function(){ try{ window.saveCollection(); }catch(e){} });
+    if(sig && sig !== lastSig){ lastSig = sig; saveNow("autosave changed collection"); }
+  }
+
+  window.drivermonSaveNowV208 = saveNow;
+  window.drivermonLoadNowV208 = loadBest;
+
+  window.addEventListener("DOMContentLoaded", function(){
+    setTimeout(()=>loadBest().then(()=>{ lastSig = signature(); }), 50);
+    setTimeout(()=>loadBest().then(()=>{ lastSig = signature(); }), 900);
+  });
+  window.addEventListener("load", function(){
+    setTimeout(()=>loadBest().then(()=>{ lastSig = signature(); }), 300);
+    setInterval(autosaveIfChanged, 1200);
+  });
+  window.addEventListener("beforeunload", function(){ try{ saveNow("beforeunload"); }catch(e){} });
 })();
 </script>
-
 </body>
 </html>
 
