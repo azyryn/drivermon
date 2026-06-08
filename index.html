@@ -926,10 +926,13 @@ function addDriverMon(){
     img:faceImages.length-1
   });
 
+  // v214 real fix: persist immediately, before clearing the form or any later Firebase/leaderboard code runs.
+  if(typeof saveCollection === "function") saveCollection();
+  if(typeof publishPlayerStats === "function") setTimeout(()=>publishPlayerStats(), 50);
+  if(typeof publishPublicPlayerCollection === "function") setTimeout(()=>publishPublicPlayerCollection(), 100);
+
   clearCreator();
   renderCards();
-  try{ if(typeof window.saveCollection === "function") window.saveCollection(); }catch(e){}
-  try{ if(typeof window.publishPlayerStats === "function") setTimeout(window.publishPlayerStats, 50); }catch(e){}
 }
 
 function updateDriverMon(){
@@ -962,10 +965,13 @@ function updateDriverMon(){
     d.img = faceImages.length-1;
   }
 
+  // v214 real fix: persist edits immediately.
+  if(typeof saveCollection === "function") saveCollection();
+  if(typeof publishPlayerStats === "function") setTimeout(()=>publishPlayerStats(), 50);
+  if(typeof publishPublicPlayerCollection === "function") setTimeout(()=>publishPublicPlayerCollection(), 100);
+
   clearCreator();
   renderCards();
-  try{ if(typeof window.saveCollection === "function") window.saveCollection(); }catch(e){}
-  try{ if(typeof window.publishPlayerStats === "function") setTimeout(window.publishPlayerStats, 50); }catch(e){}
 }
 
 function editCard(uid){
@@ -5546,7 +5552,9 @@ window.addEventListener("load", ()=>{
       const payload = {
         drivers: Array.isArray(window.drivers) ? window.drivers : (typeof drivers !== "undefined" ? drivers : []),
         faceImages: (typeof faceImages !== "undefined" && Array.isArray(faceImages)) ? faceImages : [],
-        fullImages: (typeof fullImages !== "undefined" && Array.isArray(fullImages)) ? fullImages : [],
+        // v214: do not store full screenshots; they can exceed browser storage and make the whole save fail.
+        // Use face images as the edit-preview fallback instead.
+        fullImages: (typeof faceImages !== "undefined" && Array.isArray(faceImages)) ? faceImages : [],
         nextUid: (typeof nextUid !== "undefined") ? nextUid : null,
         savedAt: new Date().toISOString()
       };
@@ -5572,8 +5580,12 @@ window.addEventListener("load", ()=>{
         faceImages.splice(0, faceImages.length, ...payload.faceImages);
       }
 
-      if(typeof fullImages !== "undefined" && Array.isArray(fullImages) && Array.isArray(payload.fullImages) && payload.fullImages.length){
-        fullImages.splice(0, fullImages.length, ...payload.fullImages);
+      if(typeof fullImages !== "undefined" && Array.isArray(fullImages)){
+        if(Array.isArray(payload.fullImages) && payload.fullImages.length){
+          fullImages.splice(0, fullImages.length, ...payload.fullImages);
+        }else if(Array.isArray(payload.faceImages) && payload.faceImages.length){
+          fullImages.splice(0, fullImages.length, ...payload.faceImages);
+        }
       }
 
       if(typeof nextUid !== "undefined" && payload.nextUid){
@@ -7339,263 +7351,6 @@ window.addEventListener("DOMContentLoaded", function(){
   window.addEventListener('load', applyWelcomePreference);
   setTimeout(applyWelcomePreference, 250);
   setTimeout(applyWelcomePreference, 1000);
-})();
-</script>
-
-
-
-<!-- v213: authoritative Firebase collection save - blocks older lightweight leaderboard publishers from wiping full card data -->
-<script>
-(function(){
-  const LB_PATH = "trades/__leaderboardPlayers";
-  const COLLECTION_KEY = "drivermon_collection_v1";
-  const PLAYER_ID_KEYS = ["drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","drivermonDevicePlayerId","playerId","driverMonPlayerId"];
-  const PROFILE_KEYS = ["driverMonPlayerProfile","playerProfile","drivermonPlayerProfile","drivermon_profile_v1"];
-
-  function safe(x){ return String(x||"").replace(/[^a-zA-Z0-9_-]/g,"_") || "player"; }
-  function norm(x){ return String(x||"").trim().toLowerCase(); }
-  function now(){ return Date.now(); }
-  function arrDrivers(){
-    try{ if(typeof drivers !== "undefined" && Array.isArray(drivers)) return drivers; }catch(e){}
-    try{ if(Array.isArray(window.drivers)) return window.drivers; }catch(e){}
-    return [];
-  }
-  function arrFaces(){
-    try{ if(typeof faceImages !== "undefined" && Array.isArray(faceImages)) return faceImages; }catch(e){}
-    try{ if(Array.isArray(window.faceImages)) return window.faceImages; }catch(e){}
-    return [];
-  }
-  function arrFull(){
-    try{ if(typeof fullImages !== "undefined" && Array.isArray(fullImages)) return fullImages; }catch(e){}
-    try{ if(Array.isArray(window.fullImages)) return window.fullImages; }catch(e){}
-    return [];
-  }
-  function isImg(x){ return String(x||"").startsWith("data:image") && String(x||"").length > 80; }
-  function getFace(card){
-    const faces = arrFaces();
-    if(card && card.img != null && faces[card.img] && isImg(faces[card.img])) return faces[card.img];
-    for(const k of ["face","faceImage","image","imgData","imgSrc","photo","imageData","src"]){
-      if(isImg(card && card[k])) return String(card[k]);
-    }
-    return "";
-  }
-  function putFace(card, face){
-    if(!card || !isImg(face)) return card;
-    const faces = arrFaces();
-    let idx = faces.indexOf(face);
-    if(idx < 0){ faces.push(face); idx = faces.length - 1; }
-    card.img = idx;
-    return card;
-  }
-  function number(x, fallback){ const n = Number(x); return Number.isFinite(n) ? n : (fallback||0); }
-  function cardCalc(card){ try{ if(typeof calc === "function") return calc(card) || {}; }catch(e){} return {}; }
-  function cardScore(card){ const c=cardCalc(card); return number(card && (card.power||card.score||card.totalPower), number(c.score,0)); }
-  function cardRarity(card){ const c=cardCalc(card); try{ if(typeof rarity === "function") return rarity(number(c.score, cardScore(card)), card.manualRarity); }catch(e){} return card.manualRarity || card.rarity || card.rank || "Bronze"; }
-  function cardType(card){ const c=cardCalc(card); try{ const t=(typeof driverType==="function") ? driverType(card,c) : null; if(t) return t.name || t.element || ""; }catch(e){} return card.type || card.element || ""; }
-  function cardRegion(card){ try{ if(typeof latestRegionForDriver === "function"){ const r=latestRegionForDriver(card); if(r && r.region) return r.region; } }catch(e){} return card.region || card.homeRegion || card.area || card.location || ""; }
-  function cardName(card){ return String(card && (card.name || card.driverName || card.title) || "Unnamed Driver").trim(); }
-  function cardKey(card){
-    if(!card) return "";
-    const uid = String(card.uid || card.id || card.cardId || "").trim();
-    if(uid && !uid.startsWith("demo_")) return "uid:" + uid;
-    return "fp:" + [cardName(card), cardRegion(card), card.since||"", card.deliveries||"", card.manualRarity||card.rarity||""].map(norm).join("|");
-  }
-  function quality(card){
-    let q = 0;
-    if(isImg(getFace(card))) q += 100000000;
-    q += Object.keys(card||{}).length * 1000;
-    q += number(card && (card.battleXp || card.xp || card.careerXp),0);
-    q += number(card && card.deliveries,0) / 1000;
-    return q;
-  }
-  function mergeCard(a,b){
-    if(!a) return Object.assign({}, b||{});
-    if(!b) return Object.assign({}, a||{});
-    const better = quality(b) > quality(a) ? b : a;
-    const other = better === a ? b : a;
-    const out = Object.assign({}, other, better);
-    const face = isImg(getFace(better)) ? getFace(better) : getFace(other);
-    if(face) putFace(out, face);
-    out.uid = out.uid || other.uid || better.uid;
-    return out;
-  }
-  function dedupeCards(list){
-    const map = new Map();
-    (list||[]).filter(Boolean).forEach(card=>{
-      const key = cardKey(card) || ("rand:" + Math.random());
-      map.set(key, map.has(key) ? mergeCard(map.get(key), card) : card);
-    });
-    return Array.from(map.values());
-  }
-  function cloneFull(card){
-    const out = Object.assign({}, card||{});
-    const face = getFace(card);
-    if(face) out.face = face;
-    out.region = cardRegion(card) || out.region || "";
-    out.rarity = cardRarity(card);
-    out.score = cardScore(card);
-    out.type = cardType(card);
-    out.name = cardName(card);
-    return out;
-  }
-  function publicCard(card){
-    const out = cloneFull(card);
-    // public cards can include the face too; it is what makes other-player collection previews work.
-    return {
-      uid: out.uid || out.id || out.cardId || "",
-      name: out.name,
-      region: out.region || "",
-      rarity: out.rarity || "Bronze",
-      level: out.level || out.nameRank || "?",
-      score: out.score || 0,
-      power: out.score || 0,
-      shiny: !!out.shiny,
-      type: out.type || "",
-      face: out.face || ""
-    };
-  }
-  function readProfile(){
-    try{ if(typeof getPlayerProfile === "function") return getPlayerProfile() || {}; }catch(e){}
-    for(const k of PROFILE_KEYS){
-      try{ const raw=localStorage.getItem(k); if(raw) return JSON.parse(raw) || {}; }catch(e){}
-    }
-    return {};
-  }
-  function playerName(){
-    const p=readProfile();
-    return String(p.name || p.username || p.playerName || localStorage.getItem("drivermonPlayerName") || "Player").trim() || "Player";
-  }
-  function playerIcon(){
-    const p=readProfile();
-    for(const x of [p.icon,p.avatar,p.profilePic,p.profileImage,p.image,p.photo]) if(isImg(x)) return String(x);
-    return "";
-  }
-  function playerId(){
-    let id="";
-    for(const k of PLAYER_ID_KEYS){ try{ id=localStorage.getItem(k)||""; if(id) break; }catch(e){} }
-    if(!id){ id = "player_" + Math.random().toString(36).slice(2,10) + "_" + Date.now().toString(36); }
-    id = safe(id);
-    PLAYER_ID_KEYS.forEach(k=>{ try{ localStorage.setItem(k,id); }catch(e){} });
-    return id;
-  }
-  function stats(cards){
-    return (cards||[]).reduce((a,c)=>{ const s=number(c.score||c.power,0); a.cards++; a.power+=s; if(c.shiny)a.shiny++; const r=String(c.rarity||"").toLowerCase(); if(r.includes("legend")||r.includes("final")||s>=2500)a.legendary++; return a; }, {cards:0,power:0,shiny:0,legendary:0,trader:0});
-  }
-  function canonicalRow(){
-    const local = dedupeCards(arrDrivers());
-    if(local.length !== arrDrivers().length){ arrDrivers().splice(0, arrDrivers().length, ...local); }
-    const full = local.map(cloneFull).slice(0,300);
-    const pub = local.map(publicCard).slice(0,300);
-    const p=readProfile();
-    const row={
-      id: playerId(),
-      name: playerName(),
-      username: playerName(),
-      icon: playerIcon(),
-      avatar: playerIcon(),
-      homeRegion: p.homeRegion || p.region || localStorage.getItem("drivermonHomeRegion") || "",
-      region: p.homeRegion || p.region || localStorage.getItem("drivermonHomeRegion") || "",
-      battleRating: number(localStorage.getItem("drivermonBattleRating_v185"),1000)||1000,
-      stats: stats(pub),
-      publicCollection: pub,
-      fullCollection: full,
-      updatedAt: now(),
-      collectionUpdatedAt: now(),
-      savedBy: "v213_authoritative"
-    };
-    return row;
-  }
-  function saveLocal(){
-    try{
-      const local = dedupeCards(arrDrivers());
-      if(local.length !== arrDrivers().length){ arrDrivers().splice(0, arrDrivers().length, ...local); }
-      const payload={drivers: arrDrivers(), faceImages: arrFaces(), fullImages: arrFull(), nextUid: (typeof nextUid!=="undefined"?nextUid:(window.nextUid||null)), savedAt:new Date().toISOString()};
-      localStorage.setItem(COLLECTION_KEY, JSON.stringify(payload));
-      localStorage.setItem(COLLECTION_KEY + "_backup", JSON.stringify(payload));
-      return true;
-    }catch(e){ console.warn("v213 local save failed", e); return false; }
-  }
-  function inflateRemote(raw){
-    if(!raw || typeof raw !== "object") return null;
-    const d=Object.assign({}, raw);
-    const face = d.face || d.faceImage || d.image || d.imgData || d.imgSrc || d.photo || d.src || "";
-    delete d.face; delete d.faceImage; delete d.image; delete d.imgData; delete d.imgSrc; delete d.photo; delete d.src;
-    d.uid = d.uid || d.id || d.cardId || "";
-    d.name = cardName(d);
-    d.region = d.region || d.homeRegion || "";
-    d.manualRarity = d.manualRarity || d.rarity || "Auto";
-    if(isImg(face)) putFace(d, face);
-    return d;
-  }
-  function adoptFirebaseIfBetter(){
-    if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve(false);
-    const id=playerId();
-    return tradeDb.ref(LB_PATH + "/" + id).once("value").then(snap=>{
-      const row=snap.val()||{};
-      const remoteRaw = Array.isArray(row.fullCollection) ? row.fullCollection : (Array.isArray(row.publicCollection) ? row.publicCollection : []);
-      if(!remoteRaw.length) return false;
-      const remote = remoteRaw.map(inflateRemote).filter(Boolean);
-      const local = arrDrivers().slice();
-      // Merge, but do not let lightweight no-image copies replace local image copies.
-      const merged = dedupeCards(local.concat(remote));
-      if(merged.length >= local.length){
-        arrDrivers().splice(0, arrDrivers().length, ...merged);
-        saveLocal();
-        try{ if(typeof renderCards === "function") renderCards(); }catch(e){}
-        return true;
-      }
-      return false;
-    }).catch(e=>{ console.warn("v213 adopt Firebase failed", e); return false; });
-  }
-  function publishAuthoritative(){
-    saveLocal();
-    if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve(canonicalRow());
-    const row=canonicalRow();
-    return tradeDb.ref(LB_PATH + "/" + safe(row.id)).set(row).then(()=>row).catch(e=>{ console.warn("v213 publish failed", e); return row; });
-  }
-
-  // Replace public publisher functions used by old code.
-  window.publishPlayerStats = publishAuthoritative;
-  window.publishPublicPlayerCollection = publishAuthoritative;
-  window.drivermonForceSaveCollection = saveLocal;
-
-  // Wrap saveCollection so every real card creation/edit writes the authoritative Firebase row.
-  const previousSave = window.saveCollection;
-  window.saveCollection = function(){
-    let r;
-    try{ if(typeof previousSave === "function") r = previousSave.apply(this, arguments); }catch(e){}
-    saveLocal();
-    setTimeout(publishAuthoritative, 80);
-    return r;
-  };
-
-  // Patch Firebase writes made by older lightweight publishers. If they try to set this player's leaderboard row, replace it with the full authoritative row.
-  if(typeof tradeDb !== "undefined" && tradeDb && !tradeDb.__v213AuthoritativePatch){
-    const originalRef = tradeDb.ref.bind(tradeDb);
-    tradeDb.ref = function(path){
-      const ref = originalRef(path);
-      const pathStr = String(path||"");
-      if(pathStr.indexOf(LB_PATH + "/") === 0 && pathStr.endsWith("/" + playerId())){
-        const oldSet = ref.set ? ref.set.bind(ref) : null;
-        const oldUpdate = ref.update ? ref.update.bind(ref) : null;
-        if(oldSet){ ref.set = function(value){ return oldSet(canonicalRow()); }; }
-        if(oldUpdate){ ref.update = function(value){
-          const v = value || {};
-          // Old lightweight updates can still update harmless fields, but never remove the fullCollection.
-          return oldUpdate(Object.assign({}, v, canonicalRow()));
-        }; }
-      }
-      return ref;
-    };
-    tradeDb.__v213AuthoritativePatch = true;
-  }
-
-  window.addEventListener("load", function(){
-    setTimeout(()=>adoptFirebaseIfBetter().then(publishAuthoritative), 400);
-    setTimeout(publishAuthoritative, 1600);
-    setInterval(function(){ saveLocal(); publishAuthoritative(); }, 7000);
-  });
-  window.addEventListener("beforeunload", function(){ try{ saveLocal(); }catch(e){} });
 })();
 </script>
 
@@ -10159,7 +9914,8 @@ img[alt="DriverDex"]{
       const payload={
         drivers: driversNow(),
         faceImages:(typeof faceImages!=="undefined"&&Array.isArray(faceImages))?faceImages:(Array.isArray(window.faceImages)?window.faceImages:[]),
-        fullImages:(typeof fullImages!=="undefined"&&Array.isArray(fullImages))?fullImages:(Array.isArray(window.fullImages)?window.fullImages:[]),
+        // v214: never save full screenshots here; they can blow localStorage quota.
+        fullImages:(typeof faceImages!=="undefined"&&Array.isArray(faceImages))?faceImages:(Array.isArray(window.faceImages)?window.faceImages:[]),
         nextUid:(typeof nextUid!=="undefined")?nextUid:(window.nextUid||null),
         savedAt:new Date().toISOString()
       };
@@ -10178,6 +9934,10 @@ img[alt="DriverDex"]{
         localStorage.setItem(COLLECTION_KEY, JSON.stringify(bak));
         const arr=driversNow();
         if(Array.isArray(arr)) arr.splice(0, arr.length, ...bak.drivers);
+        try{
+          if(typeof faceImages!=="undefined" && Array.isArray(faceImages) && Array.isArray(bak.faceImages)) faceImages.splice(0, faceImages.length, ...bak.faceImages);
+          if(typeof fullImages!=="undefined" && Array.isArray(fullImages) && Array.isArray(bak.fullImages)) fullImages.splice(0, fullImages.length, ...bak.fullImages);
+        }catch(e){}
         try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
       }
     }catch(e){}
@@ -10249,9 +10009,8 @@ img[alt="DriverDex"]{
       battleRating:num(localStorage.getItem("drivermonBattleRating_v185"),1000)||1000,
       stats,
       publicCollection:cards,
-      fullCollection:rowFullCollection(),
       updatedAt:Date.now(),
-      savedBy:"v210"
+      savedBy:"v204"
     };
   }
   function rowQuality(r){
@@ -10282,91 +10041,18 @@ img[alt="DriverDex"]{
       .then(()=>row)
       .catch(e=>{ console.warn("v204 publish failed",e); return row; });
   }
-
-  /* v210: merge Firebase copy back into this device before publishing, so a fresh card is not overwritten by an older local save on refresh. */
-  function cloneDriverForFirebase(d){
-    const out=Object.assign({}, d||{});
-    out.face = localFace(d);
-    // Do not store the old full screenshot array in Firebase; the cropped face is enough to rebuild the card.
-    return out;
-  }
-  function rowFullCollection(){
-    return driversNow().filter(Boolean).map(cloneDriverForFirebase).slice(0,240);
-  }
-  function inflateFirebaseDriver(x){
-    if(!x || typeof x!=="object") return null;
-    const d=Object.assign({}, x);
-    const face=String(d.face||d.faceImage||d.image||d.imgData||d.src||"");
-    delete d.face; delete d.faceImage; delete d.image; delete d.imgData; delete d.src;
-    if(face && face.indexOf("data:image")===0){
-      try{
-        const imgs=(typeof faceImages!=="undefined"&&Array.isArray(faceImages))?faceImages:(Array.isArray(window.faceImages)?window.faceImages:null);
-        if(imgs){
-          let idx=imgs.indexOf(face);
-          if(idx<0){ imgs.push(face); idx=imgs.length-1; }
-          d.img=idx;
-        }
-      }catch(e){}
-    }
-    d.uid = d.uid || d.id || d.cardId || ("fb_"+safe((d.name||"card")+"_"+(d.region||"region")));
-    d.name = d.name || d.driverName || d.title || "Recovered DriverMon";
-    d.deliveries = num(d.deliveries, d.power ? Math.max(100, Math.round(num(d.power,0)*4)) : 0);
-    d.satisfaction = (d.satisfaction===undefined ? null : d.satisfaction);
-    d.compliments = num(d.compliments, 0);
-    d.since = d.since || "May 2026";
-    d.nameRank = num(d.nameRank, d.level ? Math.max(1, Math.min(10, Math.round(num(d.level,1)/10))) : 5);
-    d.manualRarity = d.manualRarity || d.rarity || "Auto";
-    return d;
-  }
-  function mergeRemoteDrivers(remoteList){
-    const arr=driversNow();
-    if(!Array.isArray(arr) || !Array.isArray(remoteList) || !remoteList.length) return false;
-    const seen=new Set(arr.map(d=>safe(d&&d.uid || ((d&&d.name)||"")+"_"+((d&&d.region)||""))));
-    let added=0;
-    remoteList.forEach(raw=>{
-      const d=inflateFirebaseDriver(raw);
-      if(!d) return;
-      const key=safe(d.uid || (d.name+"_"+(d.region||"")));
-      const alt=safe((d.name||"")+"_"+(d.region||""));
-      if(seen.has(key) || seen.has(alt)) return;
-      arr.push(d); seen.add(key); seen.add(alt); added++;
-    });
-    if(added){
-      try{ if(typeof nextUid!=="undefined") nextUid=Math.max(Number(nextUid)||21, arr.length+21); }catch(e){}
-      robustSaveCollection();
-      try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
-      console.log("v210 merged Firebase cards into local collection:", added);
-      return true;
-    }
-    return false;
-  }
-  function mergeFirebaseBeforePublish(){
-    if(typeof tradeDb==="undefined"||!tradeDb) return Promise.resolve(false);
-    const id=safe(canonicalId());
-    return tradeDb.ref(LB_PATH+"/"+id).once("value").then(snap=>{
-      const row=snap.val()||{};
-      const remote = Array.isArray(row.fullCollection) ? row.fullCollection :
-                     Array.isArray(row.fullDrivers) ? row.fullDrivers :
-                     Array.isArray(row.drivers) ? row.drivers :
-                     Array.isArray(row.publicCollection) ? row.publicCollection : [];
-      return mergeRemoteDrivers(remote);
-    }).catch(e=>{ console.warn("v210 Firebase merge failed", e); return false; });
-  }
   window.publishPlayerStats=publishCanonicalPlayer;
   window.publishPublicPlayerCollection=publishCanonicalPlayer;
   window.drivermonCleanupDuplicatePlayers=cleanupDuplicateFirebaseRows;
   window.drivermonForceSaveCollection=robustSaveCollection;
   window.addEventListener("load", function(){
     restoreBackupIfNeeded();
-    mergeFirebaseBeforePublish().then(()=>{
-      robustSaveCollection();
-      return publishCanonicalPlayer();
-    });
-    setTimeout(()=>mergeFirebaseBeforePublish().then(publishCanonicalPlayer), 1200);
-    setTimeout(cleanupDuplicateFirebaseRows, 2600);
-    setTimeout(()=>mergeFirebaseBeforePublish().then(publishCanonicalPlayer), 5200);
-    setTimeout(cleanupDuplicateFirebaseRows, 8500);
-    setInterval(function(){ watchSave(); try{ publishCanonicalPlayer(); }catch(e){} }, 3000);
+    robustSaveCollection();
+    setTimeout(publishCanonicalPlayer, 800);
+    setTimeout(cleanupDuplicateFirebaseRows, 2200);
+    setTimeout(publishCanonicalPlayer, 4200);
+    setTimeout(cleanupDuplicateFirebaseRows, 8000);
+    setInterval(watchSave, 2500);
   });
   window.addEventListener("beforeunload", function(){ try{ robustSaveCollection(); }catch(e){} });
 })();
