@@ -7342,6 +7342,263 @@ window.addEventListener("DOMContentLoaded", function(){
 })();
 </script>
 
+
+
+<!-- v213: authoritative Firebase collection save - blocks older lightweight leaderboard publishers from wiping full card data -->
+<script>
+(function(){
+  const LB_PATH = "trades/__leaderboardPlayers";
+  const COLLECTION_KEY = "drivermon_collection_v1";
+  const PLAYER_ID_KEYS = ["drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","drivermonDevicePlayerId","playerId","driverMonPlayerId"];
+  const PROFILE_KEYS = ["driverMonPlayerProfile","playerProfile","drivermonPlayerProfile","drivermon_profile_v1"];
+
+  function safe(x){ return String(x||"").replace(/[^a-zA-Z0-9_-]/g,"_") || "player"; }
+  function norm(x){ return String(x||"").trim().toLowerCase(); }
+  function now(){ return Date.now(); }
+  function arrDrivers(){
+    try{ if(typeof drivers !== "undefined" && Array.isArray(drivers)) return drivers; }catch(e){}
+    try{ if(Array.isArray(window.drivers)) return window.drivers; }catch(e){}
+    return [];
+  }
+  function arrFaces(){
+    try{ if(typeof faceImages !== "undefined" && Array.isArray(faceImages)) return faceImages; }catch(e){}
+    try{ if(Array.isArray(window.faceImages)) return window.faceImages; }catch(e){}
+    return [];
+  }
+  function arrFull(){
+    try{ if(typeof fullImages !== "undefined" && Array.isArray(fullImages)) return fullImages; }catch(e){}
+    try{ if(Array.isArray(window.fullImages)) return window.fullImages; }catch(e){}
+    return [];
+  }
+  function isImg(x){ return String(x||"").startsWith("data:image") && String(x||"").length > 80; }
+  function getFace(card){
+    const faces = arrFaces();
+    if(card && card.img != null && faces[card.img] && isImg(faces[card.img])) return faces[card.img];
+    for(const k of ["face","faceImage","image","imgData","imgSrc","photo","imageData","src"]){
+      if(isImg(card && card[k])) return String(card[k]);
+    }
+    return "";
+  }
+  function putFace(card, face){
+    if(!card || !isImg(face)) return card;
+    const faces = arrFaces();
+    let idx = faces.indexOf(face);
+    if(idx < 0){ faces.push(face); idx = faces.length - 1; }
+    card.img = idx;
+    return card;
+  }
+  function number(x, fallback){ const n = Number(x); return Number.isFinite(n) ? n : (fallback||0); }
+  function cardCalc(card){ try{ if(typeof calc === "function") return calc(card) || {}; }catch(e){} return {}; }
+  function cardScore(card){ const c=cardCalc(card); return number(card && (card.power||card.score||card.totalPower), number(c.score,0)); }
+  function cardRarity(card){ const c=cardCalc(card); try{ if(typeof rarity === "function") return rarity(number(c.score, cardScore(card)), card.manualRarity); }catch(e){} return card.manualRarity || card.rarity || card.rank || "Bronze"; }
+  function cardType(card){ const c=cardCalc(card); try{ const t=(typeof driverType==="function") ? driverType(card,c) : null; if(t) return t.name || t.element || ""; }catch(e){} return card.type || card.element || ""; }
+  function cardRegion(card){ try{ if(typeof latestRegionForDriver === "function"){ const r=latestRegionForDriver(card); if(r && r.region) return r.region; } }catch(e){} return card.region || card.homeRegion || card.area || card.location || ""; }
+  function cardName(card){ return String(card && (card.name || card.driverName || card.title) || "Unnamed Driver").trim(); }
+  function cardKey(card){
+    if(!card) return "";
+    const uid = String(card.uid || card.id || card.cardId || "").trim();
+    if(uid && !uid.startsWith("demo_")) return "uid:" + uid;
+    return "fp:" + [cardName(card), cardRegion(card), card.since||"", card.deliveries||"", card.manualRarity||card.rarity||""].map(norm).join("|");
+  }
+  function quality(card){
+    let q = 0;
+    if(isImg(getFace(card))) q += 100000000;
+    q += Object.keys(card||{}).length * 1000;
+    q += number(card && (card.battleXp || card.xp || card.careerXp),0);
+    q += number(card && card.deliveries,0) / 1000;
+    return q;
+  }
+  function mergeCard(a,b){
+    if(!a) return Object.assign({}, b||{});
+    if(!b) return Object.assign({}, a||{});
+    const better = quality(b) > quality(a) ? b : a;
+    const other = better === a ? b : a;
+    const out = Object.assign({}, other, better);
+    const face = isImg(getFace(better)) ? getFace(better) : getFace(other);
+    if(face) putFace(out, face);
+    out.uid = out.uid || other.uid || better.uid;
+    return out;
+  }
+  function dedupeCards(list){
+    const map = new Map();
+    (list||[]).filter(Boolean).forEach(card=>{
+      const key = cardKey(card) || ("rand:" + Math.random());
+      map.set(key, map.has(key) ? mergeCard(map.get(key), card) : card);
+    });
+    return Array.from(map.values());
+  }
+  function cloneFull(card){
+    const out = Object.assign({}, card||{});
+    const face = getFace(card);
+    if(face) out.face = face;
+    out.region = cardRegion(card) || out.region || "";
+    out.rarity = cardRarity(card);
+    out.score = cardScore(card);
+    out.type = cardType(card);
+    out.name = cardName(card);
+    return out;
+  }
+  function publicCard(card){
+    const out = cloneFull(card);
+    // public cards can include the face too; it is what makes other-player collection previews work.
+    return {
+      uid: out.uid || out.id || out.cardId || "",
+      name: out.name,
+      region: out.region || "",
+      rarity: out.rarity || "Bronze",
+      level: out.level || out.nameRank || "?",
+      score: out.score || 0,
+      power: out.score || 0,
+      shiny: !!out.shiny,
+      type: out.type || "",
+      face: out.face || ""
+    };
+  }
+  function readProfile(){
+    try{ if(typeof getPlayerProfile === "function") return getPlayerProfile() || {}; }catch(e){}
+    for(const k of PROFILE_KEYS){
+      try{ const raw=localStorage.getItem(k); if(raw) return JSON.parse(raw) || {}; }catch(e){}
+    }
+    return {};
+  }
+  function playerName(){
+    const p=readProfile();
+    return String(p.name || p.username || p.playerName || localStorage.getItem("drivermonPlayerName") || "Player").trim() || "Player";
+  }
+  function playerIcon(){
+    const p=readProfile();
+    for(const x of [p.icon,p.avatar,p.profilePic,p.profileImage,p.image,p.photo]) if(isImg(x)) return String(x);
+    return "";
+  }
+  function playerId(){
+    let id="";
+    for(const k of PLAYER_ID_KEYS){ try{ id=localStorage.getItem(k)||""; if(id) break; }catch(e){} }
+    if(!id){ id = "player_" + Math.random().toString(36).slice(2,10) + "_" + Date.now().toString(36); }
+    id = safe(id);
+    PLAYER_ID_KEYS.forEach(k=>{ try{ localStorage.setItem(k,id); }catch(e){} });
+    return id;
+  }
+  function stats(cards){
+    return (cards||[]).reduce((a,c)=>{ const s=number(c.score||c.power,0); a.cards++; a.power+=s; if(c.shiny)a.shiny++; const r=String(c.rarity||"").toLowerCase(); if(r.includes("legend")||r.includes("final")||s>=2500)a.legendary++; return a; }, {cards:0,power:0,shiny:0,legendary:0,trader:0});
+  }
+  function canonicalRow(){
+    const local = dedupeCards(arrDrivers());
+    if(local.length !== arrDrivers().length){ arrDrivers().splice(0, arrDrivers().length, ...local); }
+    const full = local.map(cloneFull).slice(0,300);
+    const pub = local.map(publicCard).slice(0,300);
+    const p=readProfile();
+    const row={
+      id: playerId(),
+      name: playerName(),
+      username: playerName(),
+      icon: playerIcon(),
+      avatar: playerIcon(),
+      homeRegion: p.homeRegion || p.region || localStorage.getItem("drivermonHomeRegion") || "",
+      region: p.homeRegion || p.region || localStorage.getItem("drivermonHomeRegion") || "",
+      battleRating: number(localStorage.getItem("drivermonBattleRating_v185"),1000)||1000,
+      stats: stats(pub),
+      publicCollection: pub,
+      fullCollection: full,
+      updatedAt: now(),
+      collectionUpdatedAt: now(),
+      savedBy: "v213_authoritative"
+    };
+    return row;
+  }
+  function saveLocal(){
+    try{
+      const local = dedupeCards(arrDrivers());
+      if(local.length !== arrDrivers().length){ arrDrivers().splice(0, arrDrivers().length, ...local); }
+      const payload={drivers: arrDrivers(), faceImages: arrFaces(), fullImages: arrFull(), nextUid: (typeof nextUid!=="undefined"?nextUid:(window.nextUid||null)), savedAt:new Date().toISOString()};
+      localStorage.setItem(COLLECTION_KEY, JSON.stringify(payload));
+      localStorage.setItem(COLLECTION_KEY + "_backup", JSON.stringify(payload));
+      return true;
+    }catch(e){ console.warn("v213 local save failed", e); return false; }
+  }
+  function inflateRemote(raw){
+    if(!raw || typeof raw !== "object") return null;
+    const d=Object.assign({}, raw);
+    const face = d.face || d.faceImage || d.image || d.imgData || d.imgSrc || d.photo || d.src || "";
+    delete d.face; delete d.faceImage; delete d.image; delete d.imgData; delete d.imgSrc; delete d.photo; delete d.src;
+    d.uid = d.uid || d.id || d.cardId || "";
+    d.name = cardName(d);
+    d.region = d.region || d.homeRegion || "";
+    d.manualRarity = d.manualRarity || d.rarity || "Auto";
+    if(isImg(face)) putFace(d, face);
+    return d;
+  }
+  function adoptFirebaseIfBetter(){
+    if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve(false);
+    const id=playerId();
+    return tradeDb.ref(LB_PATH + "/" + id).once("value").then(snap=>{
+      const row=snap.val()||{};
+      const remoteRaw = Array.isArray(row.fullCollection) ? row.fullCollection : (Array.isArray(row.publicCollection) ? row.publicCollection : []);
+      if(!remoteRaw.length) return false;
+      const remote = remoteRaw.map(inflateRemote).filter(Boolean);
+      const local = arrDrivers().slice();
+      // Merge, but do not let lightweight no-image copies replace local image copies.
+      const merged = dedupeCards(local.concat(remote));
+      if(merged.length >= local.length){
+        arrDrivers().splice(0, arrDrivers().length, ...merged);
+        saveLocal();
+        try{ if(typeof renderCards === "function") renderCards(); }catch(e){}
+        return true;
+      }
+      return false;
+    }).catch(e=>{ console.warn("v213 adopt Firebase failed", e); return false; });
+  }
+  function publishAuthoritative(){
+    saveLocal();
+    if(typeof tradeDb === "undefined" || !tradeDb) return Promise.resolve(canonicalRow());
+    const row=canonicalRow();
+    return tradeDb.ref(LB_PATH + "/" + safe(row.id)).set(row).then(()=>row).catch(e=>{ console.warn("v213 publish failed", e); return row; });
+  }
+
+  // Replace public publisher functions used by old code.
+  window.publishPlayerStats = publishAuthoritative;
+  window.publishPublicPlayerCollection = publishAuthoritative;
+  window.drivermonForceSaveCollection = saveLocal;
+
+  // Wrap saveCollection so every real card creation/edit writes the authoritative Firebase row.
+  const previousSave = window.saveCollection;
+  window.saveCollection = function(){
+    let r;
+    try{ if(typeof previousSave === "function") r = previousSave.apply(this, arguments); }catch(e){}
+    saveLocal();
+    setTimeout(publishAuthoritative, 80);
+    return r;
+  };
+
+  // Patch Firebase writes made by older lightweight publishers. If they try to set this player's leaderboard row, replace it with the full authoritative row.
+  if(typeof tradeDb !== "undefined" && tradeDb && !tradeDb.__v213AuthoritativePatch){
+    const originalRef = tradeDb.ref.bind(tradeDb);
+    tradeDb.ref = function(path){
+      const ref = originalRef(path);
+      const pathStr = String(path||"");
+      if(pathStr.indexOf(LB_PATH + "/") === 0 && pathStr.endsWith("/" + playerId())){
+        const oldSet = ref.set ? ref.set.bind(ref) : null;
+        const oldUpdate = ref.update ? ref.update.bind(ref) : null;
+        if(oldSet){ ref.set = function(value){ return oldSet(canonicalRow()); }; }
+        if(oldUpdate){ ref.update = function(value){
+          const v = value || {};
+          // Old lightweight updates can still update harmless fields, but never remove the fullCollection.
+          return oldUpdate(Object.assign({}, v, canonicalRow()));
+        }; }
+      }
+      return ref;
+    };
+    tradeDb.__v213AuthoritativePatch = true;
+  }
+
+  window.addEventListener("load", function(){
+    setTimeout(()=>adoptFirebaseIfBetter().then(publishAuthoritative), 400);
+    setTimeout(publishAuthoritative, 1600);
+    setInterval(function(){ saveLocal(); publishAuthoritative(); }, 7000);
+  });
+  window.addEventListener("beforeunload", function(){ try{ saveLocal(); }catch(e){} });
+})();
+</script>
+
 </body>
 </html>
 
@@ -9994,7 +10251,7 @@ img[alt="DriverDex"]{
       publicCollection:cards,
       fullCollection:rowFullCollection(),
       updatedAt:Date.now(),
-      savedBy:"v212"
+      savedBy:"v210"
     };
   }
   function rowQuality(r){
@@ -10061,129 +10318,24 @@ img[alt="DriverDex"]{
     d.manualRarity = d.manualRarity || d.rarity || "Auto";
     return d;
   }
-  /* v212: conservative Firebase merge. Do NOT merge by name alone.
-     v210 successfully persisted new cards, but could duplicate lightweight Firebase rows.
-     v211 de-duped too aggressively and could remove legit cards. This version only
-     merges when identity is strong: uid, image fingerprint, or full stats signature. */
-  function faceFromAny(d){
-    try{ const f=localFace(d); if(f) return String(f); }catch(e){}
-    for(const k of ["face","faceImage","image","imgData","imageData","photo","src"]){
-      const v=String(d&&d[k]||"");
-      if(v.indexOf("data:image")===0) return v;
-    }
-    return "";
-  }
-  function faceFingerprint(d){
-    const f=faceFromAny(d);
-    if(!f) return "";
-    return "face:" + f.length + ":" + f.slice(0,80) + ":" + f.slice(-80);
-  }
-  function scoreForMerge(d){
-    try{ const c=calcCard(d); return num(c && (c.score||c.power), num(d && (d.score||d.power),0)); }catch(e){}
-    return num(d && (d.score||d.power),0);
-  }
-  function levelForMerge(d){
-    try{ const c=calcCard(d); return String((c && c.level) || d.level || d.nameRank || ""); }catch(e){}
-    return String(d && (d.level || d.nameRank) || "");
-  }
-  function strongMergeKeys(d){
-    const keys=[];
-    if(!d) return keys;
-    const uid=String(d.uid||d.id||d.cardId||"").trim();
-    // Exact created card uid is strong. Ignore generated fb_ public-row ids as sole identity.
-    if(uid && !/^fb_/i.test(uid)) keys.push("uid:"+safe(uid));
-    const k=String(d.key||d.dexKey||"").trim();
-    if(k) keys.push("key:"+safe(k));
-    const fp=faceFingerprint(d); if(fp) keys.push(fp);
-    const name=norm(d.name||d.driverName||d.title);
-    const reg=norm(d.region||d.homeRegion||d.area||d.location);
-    const del=String(d.deliveries||"");
-    const sat=String(d.satisfaction||"");
-    const comp=String(d.compliments||"");
-    const since=norm(d.since||"");
-    // Full raw card signature: safe for duplicate screenshots/cards, not just same driver name.
-    if(name && (del || sat || comp || since)) keys.push("raw:"+safe([name,reg,del,sat,comp,since].join("|")));
-    const score=scoreForMerge(d);
-    const lvl=levelForMerge(d);
-    const rar=norm(d.rarity||d.manualRarity||d.rank||"");
-    // Public card signature: only when it has enough data to be reasonably unique.
-    if(name && reg && score) keys.push("pub:"+safe([name,reg,score,lvl,rar].join("|")));
-    return Array.from(new Set(keys.filter(Boolean)));
-  }
-  function mergePreferComplete(local, remote){
-    if(!local) return remote;
-    if(!remote) return local;
-    const out=Object.assign({}, remote, local); // local wins by default
-    // Fill blank local fields from remote.
-    Object.keys(remote||{}).forEach(k=>{
-      if(out[k]===undefined || out[k]===null || out[k]==="") out[k]=remote[k];
-    });
-    // Preserve or import image. Prefer existing local image, otherwise attach remote image.
-    const localFace=faceFromAny(local);
-    const remoteFace=faceFromAny(remote);
-    if(!localFace && remoteFace){
-      try{
-        const imgs=(typeof faceImages!=="undefined"&&Array.isArray(faceImages))?faceImages:(Array.isArray(window.faceImages)?window.faceImages:null);
-        if(imgs){
-          let idx=imgs.indexOf(remoteFace);
-          if(idx<0){ imgs.push(remoteFace); idx=imgs.length-1; }
-          out.img=idx;
-        }
-      }catch(e){}
-    }
-    return out;
-  }
-  function dedupeExactOnly(){
-    const arr=driversNow();
-    if(!Array.isArray(arr) || arr.length<2) return false;
-    const keyToIndex=new Map();
-    const out=[];
-    let changed=false;
-    arr.forEach(card=>{
-      const keys=strongMergeKeys(card);
-      let idx=-1;
-      for(const k of keys){ if(keyToIndex.has(k)){ idx=keyToIndex.get(k); break; } }
-      if(idx<0){
-        idx=out.length; out.push(card); keys.forEach(k=>keyToIndex.set(k,idx));
-      }else{
-        out[idx]=mergePreferComplete(out[idx], card);
-        strongMergeKeys(out[idx]).concat(keys).forEach(k=>keyToIndex.set(k,idx));
-        changed=true;
-      }
-    });
-    if(changed) arr.splice(0, arr.length, ...out);
-    return changed;
-  }
   function mergeRemoteDrivers(remoteList){
     const arr=driversNow();
     if(!Array.isArray(arr) || !Array.isArray(remoteList) || !remoteList.length) return false;
-    let changed=dedupeExactOnly();
-    const keyToIndex=new Map();
-    arr.forEach((card,i)=>strongMergeKeys(card).forEach(k=>keyToIndex.set(k,i)));
-    let added=0, merged=0;
+    const seen=new Set(arr.map(d=>safe(d&&d.uid || ((d&&d.name)||"")+"_"+((d&&d.region)||""))));
+    let added=0;
     remoteList.forEach(raw=>{
       const d=inflateFirebaseDriver(raw);
       if(!d) return;
-      const keys=strongMergeKeys(d);
-      let idx=-1;
-      for(const k of keys){ if(keyToIndex.has(k)){ idx=keyToIndex.get(k); break; } }
-      if(idx>=0){
-        arr[idx]=mergePreferComplete(arr[idx], d);
-        strongMergeKeys(arr[idx]).concat(keys).forEach(k=>keyToIndex.set(k,idx));
-        changed=true; merged++;
-        return;
-      }
-      arr.push(d);
-      const newIdx=arr.length-1;
-      strongMergeKeys(d).forEach(k=>keyToIndex.set(k,newIdx));
-      added++; changed=true;
+      const key=safe(d.uid || (d.name+"_"+(d.region||"")));
+      const alt=safe((d.name||"")+"_"+(d.region||""));
+      if(seen.has(key) || seen.has(alt)) return;
+      arr.push(d); seen.add(key); seen.add(alt); added++;
     });
-    if(changed){
-      dedupeExactOnly();
+    if(added){
       try{ if(typeof nextUid!=="undefined") nextUid=Math.max(Number(nextUid)||21, arr.length+21); }catch(e){}
       robustSaveCollection();
       try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
-      console.log("v212 conservative Firebase merge. added:", added, "merged:", merged);
+      console.log("v210 merged Firebase cards into local collection:", added);
       return true;
     }
     return false;
