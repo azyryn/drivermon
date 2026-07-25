@@ -587,17 +587,21 @@ const tradeDb = firebase.database();
     if(typeof window.normaliseTradeCode==="function") return window.normaliseTradeCode(value);
     return String(value||"").trim().toUpperCase().replace(/[^A-Z0-9]+/g,"-").replace(/^-+|-+$/g,"");
   }
-  async function freshTradeCode(){
+  function freshTradeCode(){
     const first=["BLUE","GOLD","FAST","LUCKY","COSMIC","STEEL","SHINY","SUNNY","MAGIC","WILD","BRAVE","HAPPY","SUPER","ROYAL","RAPID","MYSTIC","PIXEL","NEON","TURBO","FRESH"];
     const middle=["TACO","PIZZA","NOODLE","BURGER","SUSHI","DONUT","COOKIE","BANANA","RAMEN","CHURRO","TOAST","WAFFLE","MANGO","NACHO","DUMPLING","BURRITO","COFFEE","PICKLE","MUFFIN","BUBBLE"];
     const last=["RIVER","TIGER","DRAGON","ROCKET","PANDA","FALCON","KOALA","NINJA","WOMBAT","COMET","GOBLIN","LIZARD","PHOENIX","WIZARD","RACER","QUEST","STAR","RIDER","SHARK","MONSTER"];
     const pick=list=>list[Math.floor(Math.random()*list.length)];
-    for(let attempt=0;attempt<10;attempt++){
-      const code=pick(first)+"-"+pick(middle)+"-"+pick(last);
-      const snap=await tradeDb.ref("trades/"+code).once("value");
-      if(!snap.exists()) return code;
-    }
-    return pick(first)+"-"+pick(middle)+"-"+pick(last)+"-"+Math.random().toString(36).toUpperCase().slice(2,4);
+    return pick(first)+"-"+pick(middle)+"-"+pick(last);
+  }
+  const ACTIVE_CODE_KEY="dmActiveTradeCodes_v224";
+  const creatingTrades=new Map();
+  function activeCodes(){ try{ const value=JSON.parse(localStorage.getItem(ACTIVE_CODE_KEY)||"{}"); return value&&typeof value==="object"?value:{}; }catch(e){ return {}; } }
+  function rememberCode(uid,code){ const value=activeCodes(); value[String(uid)]=code; try{ localStorage.setItem(ACTIVE_CODE_KEY,JSON.stringify(value)); }catch(e){} }
+  function rememberedCode(uid){ return activeCodes()[String(uid)]||""; }
+  function showCreatedCode(code,status){
+    if(status) status.textContent="Trade code: "+code+" — enter this on the other device.";
+    window.prompt("Trade code created. Copy this code and enter it on the other device:",code);
   }
   function installImage(card){
     const face=card._tradeFaceImage||card.tradeFaceImage||"";
@@ -642,22 +646,32 @@ const tradeDb = firebase.database();
     setTimeout(()=>ref.once("value").then(s=>removeTransferredLocal(s.val())).catch(()=>{}),1200);
   }
 
-  window.v219CreateTradeCode=window.createTradeCode=function(uid){
+  window.v219CreateTradeCode=window.createTradeCode=function(uid,button){
     const status=document.getElementById("tradeStatus");
     if(typeof tradeDb==="undefined"||!tradeDb){ alert("Trading is not connected to Firebase yet."); return; }
     const card=localCards().find(d=>String(d.uid)===String(uid));
     if(!card){ alert("Could not find this card."); return; }
     const sender=playerId();
     if(!sender){ alert("Create your player profile before trading."); return; }
-    if(status) status.textContent="Creating trade code...";
-    freshTradeCode().then(code=>{
-      const tradeCard=typeof window.cloneCardForTrade==="function"?window.cloneCardForTrade(card):JSON.parse(JSON.stringify(card));
-      return tradeDb.ref("trades/"+code).set({code,card:tradeCard,senderId:sender,senderDeviceId:tradeDeviceId(),sourceUid:String(card.uid),createdAt:new Date().toISOString(),claimed:false}).then(()=>{
-        if(navigator.clipboard) navigator.clipboard.writeText(code).catch(()=>{});
-        if(status) status.textContent="Trade code: "+code+" — enter this on the other device.";
-        window.prompt("Trade code created. Copy this code and enter it on the other device:",code);
-      });
-    }).catch(err=>{ console.warn("Trade code failed",err); if(status) status.textContent="Trade code failed: "+(err&&err.message?err.message:"check the internet connection"); alert("Trade code failed. Check your internet connection and Firebase access."); });
+    const existing=rememberedCode(uid);
+    if(existing){
+      if(button){ button.disabled=true; button.textContent="Code Created"; }
+      if(status) status.textContent="This card already has trade code: "+existing;
+      if(navigator.clipboard) navigator.clipboard.writeText(existing).catch(()=>{});
+      return;
+    }
+    if(creatingTrades.has(String(uid))) return;
+    const code=freshTradeCode();
+    rememberCode(uid,code);
+    if(button){ button.disabled=true; button.textContent="Code Created"; }
+    if(navigator.clipboard) navigator.clipboard.writeText(code).catch(()=>{});
+    showCreatedCode(code,status);
+    const tradeCard=typeof window.cloneCardForTrade==="function"?window.cloneCardForTrade(card):JSON.parse(JSON.stringify(card));
+    const creation=tradeDb.ref("trades/"+code).set({code,card:tradeCard,senderId:sender,senderDeviceId:tradeDeviceId(),sourceUid:String(card.uid),createdAt:new Date().toISOString(),claimed:false})
+      .then(()=>{ if(status) status.textContent="Trade code ready: "+code; return code; })
+      .catch(err=>{ const value=activeCodes(); if(value[String(uid)]===code){ delete value[String(uid)]; try{ localStorage.setItem(ACTIVE_CODE_KEY,JSON.stringify(value)); }catch(e){} } if(button){ button.disabled=false; button.textContent="Trade"; } console.warn("Trade code failed",err); if(status) status.textContent="Trade code failed: "+(err&&err.message?err.message:"check the internet connection"); alert("Trade code failed. Check your internet connection and Firebase access."); })
+      .finally(()=>creatingTrades.delete(String(uid)));
+    creatingTrades.set(String(uid),creation);
   };
 
   window.v219ClaimTradeCode=window.claimTradeCode=function(){
@@ -1326,8 +1340,8 @@ function card(d){
   const shinyBanner="";
 
   return `<article class="card ${r} ${shinyClass} ${d.starterCard ? "starterCard" : ""} ${latestRegionForDriver(d).region === "International" ? "internationalCard" : ""}"><div class="card-inner">${collectionBadge(d)}${regionBadge(d)}<div class="cardHeader"><span class="level">${duplicateIconBadge(d)}<button type="button" class="typeBall" title="${driverType(d,c).name} Type" onclick="event.stopPropagation(); showTypeInfo('${driverType(d,c).name}', '${driverType(d,c).icon}')">${driverType(d,c).icon}</button>${d.shiny ? `<button type="button" class="miniShiny shinyInfoBtn" onclick="event.stopPropagation(); showShinyInfo()">✨</button>` : ``}LVL <b>${c.level}</b></span></div><div class="headWrap"><img src="${img}" alt="${d.name}"></div><div class="cardName">${d.name}</div><div class="rank">${rank(c.score)}</div><div class="statLine"><span>⚡</span><span>Speed</span><strong>${statSpeed(d,c)}</strong></div><div class="statLine"><span>🛡️</span><span>Reliability</span><strong>${statReliability(d,c)}</strong></div><div class="statLine"><span>❤️</span><span>Customer Care</span><strong>${statCare(d,c)}</strong></div><div class="statLine"><span>🧊</span><span>Efficiency</span><strong>${statEfficiency(d,c)}</strong></div><div class="statLine"><span>🏷</span><span>Name Rank</span><strong>${d.nameRank||5}</strong></div><div class="ability"><b>ABILITY:</b> ${ability(d,c)}</div>${storyLine(d)}<div class="power"><span>⭐ POWER</span><span>${c.score.toLocaleString()} / 3000</span></div>${shinyBanner}${d.traded 
-  ? `<div class="cardActionButtons tradedButtons"><div class="tradedBanner">TRADED CARD</div><button class="deleteBtn" onclick="deleteCard('${d.uid}')">Delete</button><button class="tradeBtn" onclick="createTradeCode('${d.uid}')">Trade</button></div>` 
-  : `<div class="cardActionButtons"><div class="cardActionButtons"><button class="editBtn" onclick="editCard('${d.uid}')">Edit</button><button class="deleteBtn" onclick="deleteCard('${d.uid}')">Delete</button><button class="tradeBtn" onclick="createTradeCode('${d.uid}')">Trade</button></div></div>`
+  ? `<div class="cardActionButtons tradedButtons"><div class="tradedBanner">TRADED CARD</div><button class="deleteBtn" onclick="deleteCard('${d.uid}')">Delete</button><button class="tradeBtn" onclick="event.stopPropagation(); createTradeCode('${d.uid}',this)">Trade</button></div>` 
+  : `<div class="cardActionButtons"><div class="cardActionButtons"><button class="editBtn" onclick="editCard('${d.uid}')">Edit</button><button class="deleteBtn" onclick="deleteCard('${d.uid}')">Delete</button><button class="tradeBtn" onclick="event.stopPropagation(); createTradeCode('${d.uid}',this)">Trade</button></div></div>`
 }</div></article>`;
 }
 
