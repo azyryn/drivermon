@@ -515,6 +515,7 @@ const tradeDb = firebase.database();
       if(!missingPreviousCards.length) return false;
 
       const repairs=[];
+      const fullScreenshotRepairs=[];
       drivers.forEach(card=>{
         if(!card) return;
         const before=previousByUid.get(String(card.uid));
@@ -524,24 +525,38 @@ const tradeDb = firebase.database();
         const correctFace=previous.faceImages[oldFaceIndex]||"";
         const correctFull=Array.isArray(previous.fullImages)?(previous.fullImages[oldFullIndex]||correctFace):correctFace;
         const currentFaceIndex=Number(card.imageFaceIndex!=null?card.imageFaceIndex:card.img);
+        const currentFullIndex=Number(card.imageFullIndex!=null?card.imageFullIndex:card.img);
+        if(correctFull && typeof fullImages!=="undefined" && Array.isArray(fullImages) && !fullImages[currentFullIndex]){
+          fullScreenshotRepairs.push({card,correctFull});
+        }
         if(correctFace && faceImages[currentFaceIndex]!==correctFace) repairs.push({card,correctFace,correctFull});
       });
 
       // Require multiple mismatches before touching anything: this identifies
       // the old "deleted card shifted every photo" bug, not a normal card edit.
-      if(repairs.length<2) return false;
-      repairs.forEach(({card,correctFace,correctFull})=>{
-        const artworkIndex=faceImages.length;
-        faceImages.push(correctFace);
-        if(typeof fullImages!=="undefined" && Array.isArray(fullImages)) fullImages.push(correctFull||correctFace);
-        card.img=artworkIndex;
-        card.imageFaceIndex=artworkIndex;
-        card.imageFullIndex=artworkIndex;
-        if(!card.imageKey) card.imageKey="artwork_"+String(card.uid||"card")+"_repaired";
+      let changed=false;
+      fullScreenshotRepairs.forEach(({card,correctFull})=>{
+        const fullIndex=fullImages.length;
+        fullImages.push(correctFull);
+        card.imageFullIndex=fullIndex;
+        changed=true;
       });
+      if(repairs.length>=2){
+        repairs.forEach(({card,correctFace,correctFull})=>{
+          const artworkIndex=faceImages.length;
+          faceImages.push(correctFace);
+          if(typeof fullImages!=="undefined" && Array.isArray(fullImages)) fullImages.push(correctFull||correctFace);
+          card.img=artworkIndex;
+          card.imageFaceIndex=artworkIndex;
+          card.imageFullIndex=artworkIndex;
+          if(!card.imageKey) card.imageKey="artwork_"+String(card.uid||"card")+"_repaired";
+          changed=true;
+        });
+      }
+      if(!changed) return false;
       if(typeof saveCollection==="function") saveCollection();
       if(typeof renderCards==="function") renderCards();
-      console.info("Recovered "+repairs.length+" card artwork links from the previous collection snapshot.");
+      console.info("Recovered "+repairs.length+" card artwork links and "+fullScreenshotRepairs.length+" original screenshots from the previous collection snapshot.");
       return true;
     }catch(error){ console.warn("Previous artwork snapshot could not be used",error); return false; }
   }
@@ -7961,7 +7976,10 @@ window.addEventListener("DOMContentLoaded", function(){
     const ds=payload.drivers.map(d=>Object.assign({}, d));
     try{ if(typeof drivers !== "undefined" && Array.isArray(drivers)){ drivers.splice(0, drivers.length, ...ds); } }catch(e){}
     try{ if(typeof faceImages !== "undefined" && Array.isArray(faceImages)){ faceImages.splice(0, faceImages.length, ...(Array.isArray(payload.faceImages)?payload.faceImages:[])); } }catch(e){}
-    try{ if(typeof fullImages !== "undefined" && Array.isArray(fullImages)){ fullImages.splice(0, fullImages.length, ...(Array.isArray(payload.fullImages)?payload.fullImages:[])); } }catch(e){}
+    // Full screenshots stay on the player's device/export backup. Firebase only
+    // carries face crops, so an empty cloud `fullImages` list must never erase
+    // the originals already stored locally.
+    try{ if(typeof fullImages !== "undefined" && Array.isArray(fullImages) && Array.isArray(payload.fullImages) && payload.fullImages.length){ fullImages.splice(0, fullImages.length, ...payload.fullImages); } }catch(e){}
     try{ if(typeof nextUid !== "undefined"){ nextUid=Math.max(Number(payload.nextUid)||0, maxUidFromCards(ds), 21); } }catch(e){}
     try{ localStorage.setItem(LOCAL_KEY, JSON.stringify(payload)); }catch(e){ console.warn("Local mirror save failed", e); }
     try{ if(typeof renderCards === "function") renderCards(); }catch(e){}
