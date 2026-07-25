@@ -7147,7 +7147,7 @@ window.addEventListener("DOMContentLoaded", function(){
 <script>
 (function(){
   const LB_PATH = "trades/__leaderboardPlayers";
-  const DAILY_LIMITS_KEY = "drivermonDailyBattleLimits_v201_attacker_only";
+  const DAILY_LIMITS_KEY = "drivermonDailyBattleLimits_v202_opponent_only_fix";
   const PLAYER_ID_KEYS = ["drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId","drivermonDevicePlayerId"];
   function esc(s){return String(s==null?"":s).replace(/[&<>\"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));}
   function safe(s){return String(s||"player").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90)||"player";}
@@ -7240,10 +7240,10 @@ window.addEventListener("DOMContentLoaded", function(){
   }
   function getLimits(){ let o={}; try{o=JSON.parse(localStorage.getItem(DAILY_LIMITS_KEY)||"{}");}catch(e){o={};} if(!o||o.date!==todayKey()) o={date:todayKey(),battledOpponents:{},usedCards:{}}; o.battledOpponents=o.battledOpponents||{}; return o; }
   function battleAttackKey(id){
-    let attacker="";
-    try{ attacker = typeof stableId === "function" ? stableId() : (localStorage.getItem("drivermonPlayerId")||localStorage.getItem("drivermonPlayerId_v177")||""); }catch(e){}
-    attacker = safe(attacker || "thisDevice");
-    return attacker + "__attacked__" + safe(id);
+    const opponent = String(id || "")
+      .replace(/[^a-zA-Z0-9_-]/g, "_")
+      .slice(0, 90);
+    return opponent || "__missing_opponent__";
   }
   function battled(id){ try{return !!getLimits().battledOpponents[battleAttackKey(id)];}catch(e){return false;} }
   function valueFor(r,m){ if(m==="cards")return cardCount(r); if(m==="regions")return num(r.stats&&r.stats.regions,0); if(m==="shinies")return num(r.stats&&r.stats.shinies,0); if(m==="power")return num(r.stats&&r.stats.power,0); return num(r.battleRating,1000); }
@@ -9564,7 +9564,7 @@ img[alt="DriverDex"]{
 
   function showLeaderboard(metric){ ensureCss(); window.currentLeaderboardTab=metric||window.currentLeaderboardTab||"battleRating"; const content=document.getElementById("leaderboardContent"); if(content) content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Loading battles...</div><div class="leaderMeta">Publishing your cards and reading Firebase players.</div></div></div>`; publish().finally(()=>readRows().then(rows=>renderLeaderboard(rows, window.currentLeaderboardTab))); }
 
-  const DAILY_LIMITS_KEY = "drivermonDailyBattleLimits_v201_attacker_only";
+  const DAILY_LIMITS_KEY = "drivermonDailyBattleLimits_v202_opponent_only_fix";
   function getDailyLimits(){
     let obj={};
     try{ obj=JSON.parse(localStorage.getItem(DAILY_LIMITS_KEY)||"{}"); }catch(e){ obj={}; }
@@ -9576,10 +9576,10 @@ img[alt="DriverDex"]{
   }
   function setDailyLimits(obj){ try{ localStorage.setItem(DAILY_LIMITS_KEY, JSON.stringify(obj||{})); }catch(e){} }
   function battleAttackKey(opponentId){
-    let attacker="";
-    try{ attacker = typeof getId === "function" ? getId() : (localStorage.getItem("drivermonPlayerId")||localStorage.getItem("drivermonPlayerId_v177")||""); }catch(e){}
-    attacker = safe(attacker || "thisDevice");
-    return attacker + "__attacked__" + safe(opponentId);
+    const opponent = String(opponentId || "")
+      .replace(/[^a-zA-Z0-9_-]/g, "_")
+      .slice(0, 90);
+    return opponent || "__missing_opponent__";
   }
   function hasBattledOpponentToday(opponentId){ const d=getDailyLimits(); return !!d.battledOpponents[battleAttackKey(opponentId)]; }
   function markDailyBattle(opponentId, team){
@@ -9633,7 +9633,7 @@ img[alt="DriverDex"]{
 (function(){
   const LB_PATH = "trades/__leaderboardPlayers";
   const PLAYER_ID_KEYS = ["drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId","drivermonDevicePlayerId"];
-  const DAILY_LIMITS_KEY = "drivermonDailyBattleLimits_v201_attacker_only";
+  const DAILY_LIMITS_KEY = "drivermonDailyBattleLimits_v202_opponent_only_fix";
 
   function esc(s){return String(s==null?"":s).replace(/[&<>\"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));}
   function safe(s){return String(s||"player").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90)||"player";}
@@ -9664,10 +9664,10 @@ img[alt="DriverDex"]{
 
   function getDailyLimits(){ let o={}; try{o=JSON.parse(localStorage.getItem(DAILY_LIMITS_KEY)||"{}");}catch(e){o={};} if(!o||o.date!==todayKey()) o={date:todayKey(),battledOpponents:{},usedCards:{}}; o.battledOpponents=o.battledOpponents||{}; return o; }
   function battleAttackKey(id){
-    let attacker="";
-    try{ attacker = typeof stableId === "function" ? stableId() : (typeof getId === "function" ? getId() : (localStorage.getItem("drivermonPlayerId")||localStorage.getItem("drivermonPlayerId_v177")||"")); }catch(e){}
-    attacker = safe(attacker || "thisDevice");
-    return attacker + "__attacked__" + safe(id);
+    const opponent = String(id || "")
+      .replace(/[^a-zA-Z0-9_-]/g, "_")
+      .slice(0, 90);
+    return opponent || "__missing_opponent__";
   }
   function hasBattledOpponentToday(id){ try{return !!getDailyLimits().battledOpponents[battleAttackKey(id)];}catch(e){return false;} }
 
@@ -9789,7 +9789,7 @@ img[alt="DriverDex"]{
 (function(){
   const LB_PATH = "trades/__leaderboardPlayers";
   const PLAYER_ID_KEYS = ["drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId","drivermonDevicePlayerId"];
-  const DAILY_LIMITS_KEY = "drivermonDailyBattleLimits_v201_attacker_only";
+  const DAILY_LIMITS_KEY = "drivermonDailyBattleLimits_v202_opponent_only_fix";
 
   function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));}
   function safe(s){return String(s||"player").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90)||"player";}
@@ -9822,10 +9822,10 @@ img[alt="DriverDex"]{
     return o;
   }
   function battleAttackKey(id){
-    let attacker="";
-    try{ attacker = typeof stableId === "function" ? stableId() : (typeof getId === "function" ? getId() : (localStorage.getItem("drivermonPlayerId")||localStorage.getItem("drivermonPlayerId_v177")||"")); }catch(e){}
-    attacker = safe(attacker || "thisDevice");
-    return attacker + "__attacked__" + safe(id);
+    const opponent = String(id || "")
+      .replace(/[^a-zA-Z0-9_-]/g, "_")
+      .slice(0, 90);
+    return opponent || "__missing_opponent__";
   }
   function hasBattledOpponentToday(id){ try{return !!getDailyLimits().battledOpponents[battleAttackKey(id)];}catch(e){return false;} }
 
