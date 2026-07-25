@@ -9633,6 +9633,7 @@ img[alt="DriverDex"]{
 (function(){
   const LB_PATH = "trades/__leaderboardPlayers";
   const PLAYER_ID_KEYS = ["drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId","drivermonDevicePlayerId"];
+  const STABLE_PLAYER_ID_KEY = "drivermonStablePlayerId_v208";
   const DAILY_LIMITS_KEY = "drivermonDailyBattleLimits_v207_single_click";
 
   function esc(s){return String(s==null?"":s).replace(/[&<>\"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));}
@@ -9650,13 +9651,11 @@ img[alt="DriverDex"]{
   function localName(){ const p=getProfile(); return String(p.username||p.name||p.playerName||p.displayName||"").trim(); }
   function localIcon(){ const p=getProfile(); for(const x of [p.avatar,p.avatarData,p.icon,p.profilePic,p.profileImage,p.image,p.photo]) if(String(x||"").startsWith("data:image")) return String(x); return ""; }
   function stableId(){
-    const name=localName();
     let id="";
-    // If the profile has a real name, use a stable name-based id. This stops private/refresh duplicates.
-    if(name && norm(name)!=="player" && norm(name)!=="guest") id = "dm_" + safe(norm(name));
+    try{ id=safe(localStorage.getItem(STABLE_PLAYER_ID_KEY)||""); if(id==="player") id=""; }catch(e){}
     if(!id){ for(const k of PLAYER_ID_KEYS){ try{ const v=localStorage.getItem(k); if(v){ id=safe(v); break; } }catch(e){} } }
     if(!id) id = "dm_device_" + Math.random().toString(36).slice(2,10) + "_" + Date.now().toString(36);
-    try{ PLAYER_ID_KEYS.forEach(k=>localStorage.setItem(k,id)); }catch(e){}
+    try{ localStorage.setItem(STABLE_PLAYER_ID_KEY,id); PLAYER_ID_KEYS.forEach(k=>localStorage.setItem(k,id)); }catch(e){}
     return id;
   }
   // Run immediately so the older battle publisher reuses this id on load.
@@ -9789,6 +9788,7 @@ img[alt="DriverDex"]{
 (function(){
   const LB_PATH = "trades/__leaderboardPlayers";
   const PLAYER_ID_KEYS = ["drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId","drivermonDevicePlayerId"];
+  const STABLE_PLAYER_ID_KEY = "drivermonStablePlayerId_v208";
   const DAILY_LIMITS_KEY = "drivermonDailyBattleLimits_v207_single_click";
 
   function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));}
@@ -9807,12 +9807,11 @@ img[alt="DriverDex"]{
   function localName(){ const p=getProfile(); return String(p.username||p.name||p.playerName||p.displayName||"").trim(); }
   function localIcon(){ const p=getProfile(); for(const x of [p.avatar,p.avatarData,p.icon,p.profilePic,p.profileImage,p.image,p.photo]) if(String(x||"").startsWith("data:image")) return String(x); return ""; }
   function stableId(){
-    const name=localName();
     let id="";
-    if(name && norm(name)!=="player" && norm(name)!=="guest") id = "dm_" + safe(norm(name));
+    try{ id=safe(localStorage.getItem(STABLE_PLAYER_ID_KEY)||""); if(id==="player") id=""; }catch(e){}
     if(!id){ for(const k of PLAYER_ID_KEYS){ try{ const v=localStorage.getItem(k); if(v){ id=safe(v); break; } }catch(e){} } }
     if(!id) id = "dm_device_" + Math.random().toString(36).slice(2,10) + "_" + Date.now().toString(36);
-    try{ PLAYER_ID_KEYS.forEach(k=>localStorage.setItem(k,id)); }catch(e){}
+    try{ localStorage.setItem(STABLE_PLAYER_ID_KEY,id); PLAYER_ID_KEYS.forEach(k=>localStorage.setItem(k,id)); }catch(e){}
     return id;
   }
   function getDailyLimits(){
@@ -9881,6 +9880,11 @@ img[alt="DriverDex"]{
       if(an && bn && an!=="player" && an!=="guest" && an===bn) return true;
       const ai=identityIds(a), bi=identityIds(b);
       for(const id of ai) if(bi.has(id)) return true;
+      const av=String(a.icon||a.avatar||""), bv=String(b.icon||b.avatar||"");
+      if(av.length>100 && av===bv) return true;
+      const cardSig=r=>(r.publicCollection||[]).map(c=>String(c&&c.uid||c&&c.id||"")).filter(Boolean).sort().join("|");
+      const ac=cardSig(a), bc=cardSig(b);
+      if(ac && bc && ac.split("|").length>=2 && ac===bc) return true;
       return false;
     };
     const groups=[];
@@ -10042,6 +10046,7 @@ img[alt="DriverDex"]{
   const COLLECTION_KEY = "drivermon_collection_v1";
   const COLLECTION_BACKUP_KEY = "drivermon_collection_v1_backup";
   const PLAYER_KEYS = ["drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId","drivermonDevicePlayerId"];
+  const STABLE_PLAYER_ID_KEY = "drivermonStablePlayerId_v208";
   function safe(s){ return String(s||"player").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90)||"player"; }
   function norm(s){ return String(s||"").normalize("NFKC").trim().toLowerCase().replace(/[^a-z0-9]/g,""); }
   function num(v,f){ v=Number(v); return Number.isFinite(v)?v:(f||0); }
@@ -10053,11 +10058,11 @@ img[alt="DriverDex"]{
   }
   function playerName(){ const p=getProfile(); return String(p.username||p.name||p.playerName||p.displayName||"Player").trim()||"Player"; }
   function canonicalId(){
-    const n=norm(playerName()); let id="";
-    if(n && n!=="player" && n!=="guest") id="dm_"+safe(n);
+    let id="";
+    try{ id=safe(localStorage.getItem(STABLE_PLAYER_ID_KEY)||""); if(id==="player") id=""; }catch(e){}
     if(!id){ for(const k of PLAYER_KEYS){ try{ const v=localStorage.getItem(k); if(v){ id=safe(v); break; } }catch(e){} } }
     if(!id) id="dm_device_"+Math.random().toString(36).slice(2,10)+"_"+Date.now().toString(36);
-    try{ PLAYER_KEYS.forEach(k=>localStorage.setItem(k,id)); }catch(e){}
+    try{ localStorage.setItem(STABLE_PLAYER_ID_KEY,id); PLAYER_KEYS.forEach(k=>localStorage.setItem(k,id)); }catch(e){}
     return id;
   }
   function driversNow(){ try{ if(Array.isArray(window.drivers)) return window.drivers; }catch(e){} try{ if(typeof drivers!=="undefined" && Array.isArray(drivers)) return drivers; }catch(e){} return []; }
@@ -10169,12 +10174,31 @@ img[alt="DriverDex"]{
   function cleanupDuplicateFirebaseRows(){
     if(typeof tradeDb==="undefined"||!tradeDb) return Promise.resolve();
     return tradeDb.ref(LB_PATH).once("value").then(snap=>{
-      const val=snap.val()||{}; const groups={};
-      Object.keys(val).forEach(k=>{ const r=val[k]||{}; const name=norm(r.name||r.username); if(!name||name==="player") return; (groups[name]=groups[name]||[]).push({key:k,row:r}); });
+      const val=snap.val()||{}, groups=[];
+      const cardSig=r=>(r&&r.publicCollection||[]).map(c=>String(c&&c.uid||c&&c.id||"")).filter(Boolean).sort().join("|");
+      const sameOwner=(a,b)=>{
+        const an=norm(a.row.name||a.row.username), bn=norm(b.row.name||b.row.username);
+        if(an&&bn&&an!=="player"&&an!=="guest"&&an===bn) return true;
+        const aid=safe(a.row.id||a.row.playerId||a.key), bid=safe(b.row.id||b.row.playerId||b.key);
+        if(aid===bid) return true;
+        const av=String(a.row.icon||a.row.avatar||""), bv=String(b.row.icon||b.row.avatar||"");
+        if(av.length>100&&av===bv) return true;
+        const ac=cardSig(a.row), bc=cardSig(b.row);
+        return !!(ac&&bc&&ac.split("|").length>=2&&ac===bc);
+      };
+      Object.keys(val).forEach(k=>{
+        const item={key:k,row:val[k]||{}}, hits=[];
+        groups.forEach((g,i)=>{ if(g.some(x=>sameOwner(x,item))) hits.push(i); });
+        if(!hits.length){ groups.push([item]); return; }
+        const target=hits[0]; groups[target].push(item);
+        for(let i=hits.length-1;i>0;i--){ const at=hits[i]; groups[target].push(...groups[at]); groups.splice(at,1); }
+      });
       const ops=[];
-      Object.keys(groups).forEach(name=>{
-        const g=groups[name]; if(g.length<2) return;
-        let keep=g[0]; g.forEach(x=>{ if(rowQuality(x.row)>rowQuality(keep.row)) keep=x; });
+      const mine=canonicalId();
+      groups.forEach(g=>{
+        if(g.length<2) return;
+        let keep=g.find(x=>safe(x.key)===mine)||g[0];
+        if(!g.some(x=>safe(x.key)===mine)) g.forEach(x=>{ if(rowQuality(x.row)>rowQuality(keep.row)) keep=x; });
         g.forEach(x=>{ if(x.key!==keep.key) ops.push(tradeDb.ref(LB_PATH+"/"+safe(x.key)).remove()); });
       });
       return Promise.all(ops);
