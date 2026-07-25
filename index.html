@@ -699,7 +699,7 @@ const tradeDb = firebase.database();
     const recipientDevice=tradeDeviceId();
     if(status) status.textContent=isRetry?"Waiting for the card to finish uploading...":"Claiming card...";
     const ref=tradeDb.ref("trades/"+code);
-    ref.transaction(trade=>{
+    const runClaimTransaction=()=>ref.transaction(trade=>{
       const sameCreatingDevice=safe(trade&&trade.senderId)===safe(recipient) && (!trade.senderDeviceId||safe(trade.senderDeviceId)===safe(recipientDevice));
       if(!trade||!trade.card||!trade.senderId||!trade.sourceUid||trade.claimed||sameCreatingDevice) return;
       trade.claimed=true; trade.claimedAt=new Date().toISOString(); trade.claimedBy=recipient; return trade;
@@ -734,6 +734,28 @@ const tradeDb = firebase.database();
       try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
       if(input) input.value=""; if(status) status.textContent="Card transferred to your collection. It has been removed from the original owner.";
     },false);
+    ref.once("value").then(preview=>{
+      const visibleTrade=preview&&preview.val();
+      if(visibleTrade){
+        claimWaits.delete(code);
+        runClaimTransaction();
+        return;
+      }
+      const state=claimWaits.get(code)||{started:Date.now(),timer:null};
+      if(Date.now()-state.started<60000){
+        if(status) status.textContent="Waiting for Firebase to return the trade code...";
+        clearTimeout(state.timer);
+        state.timer=setTimeout(()=>window.v219ClaimTradeCode(true),2000);
+        claimWaits.set(code,state);
+        return;
+      }
+      claimWaits.delete(code);
+      if(status) status.textContent="Firebase did not return that code to this device. Check that both devices have the newest game version.";
+    }).catch(error=>{
+      claimWaits.delete(code);
+      console.warn("Trade code read failed",error);
+      if(status) status.textContent="Firebase blocked the code lookup: "+(error&&error.message?error.message:"check database access");
+    });
   };
 
   window.addEventListener("load",watchMyTransfers);
