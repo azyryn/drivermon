@@ -497,6 +497,72 @@ const tradeDb = firebase.database();
 })();
 </script>
 
+<!-- v223: permanently bind every starter's identity, stats and images together -->
+<script>
+(function(){
+  let lastRepairSignature="";
+  function safeArrays(){
+    try{
+      return {
+        cards:(typeof drivers!=="undefined"&&Array.isArray(drivers))?drivers:null,
+        faces:(typeof faceImages!=="undefined"&&Array.isArray(faceImages))?faceImages:null,
+        fulls:(typeof fullImages!=="undefined"&&Array.isArray(fullImages))?fullImages:null
+      };
+    }catch(e){ return {}; }
+  }
+  function originalUid(card){ return String(card&&card.originalStarterUid||card&&card.uid||"").replace(/^starter_\d+_/,""); }
+  function installMatchedImage(card,bundle,faces,fulls){
+    const face=bundle._starterFaceImage||"", full=bundle._starterFullImage||face;
+    if(!face||!faces||!fulls) return;
+    let index=faces.findIndex((value,i)=>value===face&&fulls[i]===full);
+    if(index<0){
+      index=Math.max(faces.length,fulls.length);
+      while(faces.length<index) faces.push("");
+      while(fulls.length<index) fulls.push("");
+      faces[index]=face; fulls[index]=full;
+    }
+    card.img=index;
+    card._starterFaceImage=face;
+    card._starterFullImage=full;
+  }
+  function repairStarterBundles(){
+    const bundles=Array.isArray(window.DRIVERMON_STARTER_BUNDLES)?window.DRIVERMON_STARTER_BUNDLES:[];
+    const current=safeArrays();
+    if(!bundles.length||!current.cards||!current.faces||!current.fulls) return false;
+    let changed=false;
+    current.cards.forEach((card,index)=>{
+      if(!card||!(card.starterCard||String(card.uid||"").startsWith("starter_"))) return;
+      const bundle=bundles.find(item=>String(item.uid)===originalUid(card));
+      if(!bundle) return;
+      const repaired=Object.assign({},card,JSON.parse(JSON.stringify(bundle)));
+      repaired.uid=card.uid||("starter_"+index+"_"+bundle.uid);
+      repaired.originalStarterUid=bundle.uid;
+      repaired.starterCard=true;
+      delete repaired.region; delete repaired.country;
+      installMatchedImage(repaired,bundle,current.faces,current.fulls);
+      const before=JSON.stringify([card.name,card.deliveries,card.satisfaction,card.since,card.compliments,card.nameRank,card.img]);
+      const after=JSON.stringify([repaired.name,repaired.deliveries,repaired.satisfaction,repaired.since,repaired.compliments,repaired.nameRank,repaired.img]);
+      if(before!==after||card._starterFaceImage!==repaired._starterFaceImage) changed=true;
+      current.cards[index]=repaired;
+    });
+    const signature=JSON.stringify(current.cards.filter(c=>c&&c.starterCard).map(c=>[c.uid,c.originalStarterUid,c.name,c.img]));
+    if((changed||signature!==lastRepairSignature)&&signature){
+      lastRepairSignature=signature;
+      try{ if(typeof saveCollection==="function") saveCollection(); }catch(e){}
+      try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
+      return true;
+    }
+    return false;
+  }
+  window.dmRepairStarterBundles=repairStarterBundles;
+  window.addEventListener("load",()=>{
+    setTimeout(repairStarterBundles,900);
+    setTimeout(repairStarterBundles,2500);
+    setTimeout(repairStarterBundles,5000);
+  });
+})();
+</script>
+
 <!-- v219: one-way Firebase card ownership transfers -->
 <script>
 (function(){
@@ -520,6 +586,18 @@ const tradeDb = firebase.database();
   function normalise(value){
     if(typeof window.normaliseTradeCode==="function") return window.normaliseTradeCode(value);
     return String(value||"").trim().toUpperCase().replace(/[^A-Z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+  }
+  async function freshTradeCode(){
+    const first=["BLUE","GOLD","FAST","LUCKY","COSMIC","STEEL","SHINY","SUNNY","MAGIC","WILD","BRAVE","HAPPY","SUPER","ROYAL","RAPID","MYSTIC","PIXEL","NEON","TURBO","FRESH"];
+    const middle=["TACO","PIZZA","NOODLE","BURGER","SUSHI","DONUT","COOKIE","BANANA","RAMEN","CHURRO","TOAST","WAFFLE","MANGO","NACHO","DUMPLING","BURRITO","COFFEE","PICKLE","MUFFIN","BUBBLE"];
+    const last=["RIVER","TIGER","DRAGON","ROCKET","PANDA","FALCON","KOALA","NINJA","WOMBAT","COMET","GOBLIN","LIZARD","PHOENIX","WIZARD","RACER","QUEST","STAR","RIDER","SHARK","MONSTER"];
+    const pick=list=>list[Math.floor(Math.random()*list.length)];
+    for(let attempt=0;attempt<10;attempt++){
+      const code=pick(first)+"-"+pick(middle)+"-"+pick(last);
+      const snap=await tradeDb.ref("trades/"+code).once("value");
+      if(!snap.exists()) return code;
+    }
+    return pick(first)+"-"+pick(middle)+"-"+pick(last)+"-"+Math.random().toString(36).toUpperCase().slice(2,4);
   }
   function installImage(card){
     const face=card._tradeFaceImage||card.tradeFaceImage||"";
@@ -565,23 +643,27 @@ const tradeDb = firebase.database();
   }
 
   window.v219CreateTradeCode=window.createTradeCode=function(uid){
+    const status=document.getElementById("tradeStatus");
     if(typeof tradeDb==="undefined"||!tradeDb){ alert("Trading is not connected to Firebase yet."); return; }
     const card=localCards().find(d=>String(d.uid)===String(uid));
     if(!card){ alert("Could not find this card."); return; }
     const sender=playerId();
     if(!sender){ alert("Create your player profile before trading."); return; }
-    window.makeUniqueTradeCode().then(code=>{
+    if(status) status.textContent="Creating trade code...";
+    freshTradeCode().then(code=>{
       const tradeCard=typeof window.cloneCardForTrade==="function"?window.cloneCardForTrade(card):JSON.parse(JSON.stringify(card));
       return tradeDb.ref("trades/"+code).set({code,card:tradeCard,senderId:sender,senderDeviceId:tradeDeviceId(),sourceUid:String(card.uid),createdAt:new Date().toISOString(),claimed:false}).then(()=>{
         if(navigator.clipboard) navigator.clipboard.writeText(code).catch(()=>{});
-        alert("Trade code created:\n\n"+code+"\n\nThe card will leave your collection when another player claims it.");
+        if(status) status.textContent="Trade code: "+code+" — enter this on the other device.";
+        window.prompt("Trade code created. Copy this code and enter it on the other device:",code);
       });
-    }).catch(err=>{ console.warn("Trade code failed",err); alert("Trade code failed. Check your internet connection."); });
+    }).catch(err=>{ console.warn("Trade code failed",err); if(status) status.textContent="Trade code failed: "+(err&&err.message?err.message:"check the internet connection"); alert("Trade code failed. Check your internet connection and Firebase access."); });
   };
 
   window.v219ClaimTradeCode=window.claimTradeCode=function(){
     const input=document.getElementById("tradeCodeInput"), status=document.getElementById("tradeStatus");
-    const code=normalise(input&&input.value); if(!code){ if(status) status.textContent="Enter a trade code first."; return; }
+    let code=normalise(input&&input.value);
+    if(!code){ if(status) status.textContent="Enter a trade code first."; return; }
     if(typeof tradeDb==="undefined"||!tradeDb){ if(status) status.textContent="Trading is not connected to Firebase."; return; }
     const recipient=playerId(); if(!recipient){ if(status) status.textContent="Create your player profile before claiming a card."; return; }
     const recipientDevice=tradeDeviceId();
@@ -1411,6 +1493,13 @@ drivers.forEach(d=>{
   try{
     const fullStarterPool = drivers.slice(0, 20).map(d => JSON.parse(JSON.stringify(d)));
     window.DRIVERMON_FULL_STARTER_POOL = fullStarterPool;
+    window.DRIVERMON_STARTER_BUNDLES = fullStarterPool.map(card=>{
+      const bundle=JSON.parse(JSON.stringify(card));
+      const imageIndex=Number(card&&card.img);
+      bundle._starterFaceImage=(typeof faceImages!=="undefined"&&faceImages[imageIndex])?faceImages[imageIndex]:"";
+      bundle._starterFullImage=(typeof fullImages!=="undefined"&&fullImages[imageIndex])?fullImages[imageIndex]:bundle._starterFaceImage;
+      return bundle;
+    });
 
     let chosen = null;
     const saved = localStorage.getItem(STARTER_KEY);
