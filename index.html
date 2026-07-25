@@ -497,25 +497,335 @@ const tradeDb = firebase.database();
 })();
 </script>
 
+<!-- v228: durable card artwork and loss-proof collection saving -->
+<script>
+window.dmV228Install=function(){
+  "use strict";
+  const BUILD="228-durable-artwork";
+  const COLLECTION_KEY="drivermon_collection_v1";
+  const BACKUP_KEY="drivermon_collection_v1_backup";
+  const LAST_GOOD_KEY="drivermon_collection_v1_last_non_empty";
+  const CLOUD_ROOT="trades/__playerCollections";
+  const DB_NAME="drivermon_artwork_v228";
+  const STORE_NAME="artwork";
+  let allowEmptyUntil=0;
+
+  function list(){
+    try{ return (typeof drivers!=="undefined"&&Array.isArray(drivers))?drivers:[]; }
+    catch(e){ return []; }
+  }
+  function faces(){
+    try{ return (typeof faceImages!=="undefined"&&Array.isArray(faceImages))?faceImages:[]; }
+    catch(e){ return []; }
+  }
+  function fulls(){
+    try{ return (typeof fullImages!=="undefined"&&Array.isArray(fullImages))?fullImages:[]; }
+    catch(e){ return []; }
+  }
+  function stableUid(card,index){
+    if(!card.uid) card.uid="card_"+Date.now().toString(36)+"_"+index+"_"+Math.random().toString(36).slice(2,8);
+    return String(card.uid);
+  }
+  function playerId(){
+    const keys=["drivermonStablePlayerId_v208","drivermonDevicePlayerId","drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId"];
+    for(const key of keys){
+      try{ const value=localStorage.getItem(key); if(value) return String(value).replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90); }catch(e){}
+    }
+    return "";
+  }
+  function parsed(raw){
+    try{ const value=JSON.parse(raw||"null"); return value&&Array.isArray(value.drivers)?value:null; }
+    catch(e){ return null; }
+  }
+  function imageAt(items,index){
+    const value=items[Number(index)];
+    return typeof value==="string"&&value.startsWith("data:image")?value:"";
+  }
+
+  // First attach both images directly to the permanent card UID. Array positions
+  // are rebuilt only as a compatibility view for the older rendering code.
+  function bindArtwork(preferred){
+    const cards=list(), oldFaces=faces().slice(), oldFulls=fulls().slice();
+    const newFaces=[],newFulls=[];
+    cards.forEach((card,index)=>{
+      if(!card) return;
+      const uid=stableUid(card,index), saved=preferred&&preferred[uid]||{};
+      const faceIndex=card.imageFaceIndex!=null?card.imageFaceIndex:(card.img!=null?card.img:index);
+      const fullIndex=card.imageFullIndex!=null?card.imageFullIndex:(card.img!=null?card.img:index);
+      const face=saved.face||card.cardFaceData||card._starterFaceImage||imageAt(oldFaces,faceIndex)||"";
+      const full=saved.full||card.cardFullData||card._starterFullImage||imageAt(oldFulls,fullIndex)||"";
+      card.cardFaceData=face;
+      if(full) card.cardFullData=full;
+      card.imageKey="artwork_uid_"+uid;
+      card.img=index;
+      card.imageFaceIndex=index;
+      card.imageFullIndex=index;
+      newFaces[index]=face;
+      newFulls[index]=full;
+    });
+    faces().splice(0,faces().length,...newFaces);
+    fulls().splice(0,fulls().length,...newFulls);
+  }
+
+  function openArtworkDb(){
+    return new Promise((resolve,reject)=>{
+      if(!window.indexedDB){ reject(new Error("IndexedDB unavailable")); return; }
+      const request=indexedDB.open(DB_NAME,1);
+      request.onupgradeneeded=()=>{
+        const db=request.result;
+        if(!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME,{keyPath:"uid"});
+      };
+      request.onsuccess=()=>resolve(request.result);
+      request.onerror=()=>reject(request.error||new Error("Artwork database failed"));
+    });
+  }
+  async function persistArtwork(){
+    bindArtwork();
+    const cards=list().filter(Boolean);
+    if(!cards.length) return;
+    try{
+      const db=await openArtworkDb();
+      await new Promise((resolve,reject)=>{
+        const tx=db.transaction(STORE_NAME,"readwrite"),store=tx.objectStore(STORE_NAME);
+        cards.forEach((card,index)=>{
+          const uid=stableUid(card,index),request=store.get(uid);
+          request.onsuccess=()=>{
+            const saved=request.result||{};
+            store.put({
+              uid,
+              face:card.cardFaceData||saved.face||"",
+              full:card.cardFullData||saved.full||"",
+              updatedAt:Date.now()
+            });
+          };
+        });
+        tx.oncomplete=resolve; tx.onerror=()=>reject(tx.error); tx.onabort=()=>reject(tx.error);
+      });
+      db.close();
+    }catch(e){ console.warn("DriverMon artwork save failed",e); }
+  }
+  async function removeArtwork(uid){
+    try{
+      const db=await openArtworkDb();
+      await new Promise((resolve,reject)=>{
+        const tx=db.transaction(STORE_NAME,"readwrite"); tx.objectStore(STORE_NAME).delete(String(uid));
+        tx.oncomplete=resolve; tx.onerror=()=>reject(tx.error); tx.onabort=()=>reject(tx.error);
+      });
+      db.close();
+    }catch(e){ console.warn("DriverMon artwork delete failed",e); }
+  }
+  async function hydrateArtwork(){
+    const cards=list().filter(Boolean); if(!cards.length) return false;
+    try{
+      const db=await openArtworkDb(), wanted=new Set(cards.map((card,index)=>stableUid(card,index)));
+      const map=await new Promise((resolve,reject)=>{
+        const result={},tx=db.transaction(STORE_NAME,"readonly"),request=tx.objectStore(STORE_NAME).openCursor();
+        request.onsuccess=()=>{ const cursor=request.result; if(!cursor){ resolve(result); return; } if(wanted.has(String(cursor.key))) result[String(cursor.key)]=cursor.value||{}; cursor.continue(); };
+        request.onerror=()=>reject(request.error);
+      });
+      db.close(); bindArtwork(map);
+      try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
+      return Object.keys(map).length>0;
+    }catch(e){ console.warn("DriverMon artwork load failed",e); return false; }
+  }
+
+  function metadataPayload(){
+    bindArtwork();
+    const cards=list().map((card,index)=>{
+      const copy=Object.assign({},card),uid=stableUid(card,index);
+      copy.uid=uid;
+      delete copy.cardFaceData; delete copy.cardFullData;
+      delete copy._starterFaceImage; delete copy._starterFullImage;
+      delete copy._tradeFaceImage; delete copy._tradeFullImage;
+      delete copy.tradeFaceImage; delete copy.tradeFullImage;
+      return copy;
+    });
+    return {version:228,build:BUILD,playerId:playerId(),drivers:cards,nextUid:(typeof nextUid!=="undefined"?nextUid:null),updatedAt:Date.now(),updatedIso:new Date().toISOString(),faceImages:[],fullImages:[]};
+  }
+  function cloudPayload(){
+    const payload=metadataPayload(),artworkByUid={};
+    list().forEach((card,index)=>{ const uid=stableUid(card,index); artworkByUid[uid]={face:card.cardFaceData||""}; });
+    payload.artworkByUid=artworkByUid;
+    return payload;
+  }
+
+  // All old save routines pass through this storage method. Large image data is
+  // stripped from localStorage and an automatic empty write is rejected.
+  const nativeSetItem=Storage.prototype.setItem;
+  Storage.prototype.setItem=function(key,value){
+    if(String(key)===COLLECTION_KEY||String(key)===BACKUP_KEY||String(key)===LAST_GOOD_KEY){
+      const incoming=parsed(String(value));
+      if(incoming){
+        const existing=parsed(this.getItem(COLLECTION_KEY));
+        if(!incoming.drivers.length&&existing&&existing.drivers.length&&Date.now()>allowEmptyUntil){
+          console.warn("DriverMon blocked an automatic empty collection save");
+          return;
+        }
+        incoming.drivers=incoming.drivers.map(card=>{
+          const copy=Object.assign({},card);
+          delete copy.cardFaceData; delete copy.cardFullData;
+          delete copy._starterFaceImage; delete copy._starterFullImage;
+          delete copy._tradeFaceImage; delete copy._tradeFullImage;
+          delete copy.tradeFaceImage; delete copy.tradeFullImage;
+          return copy;
+        });
+        incoming.faceImages=[]; incoming.fullImages=[];
+        if(incoming.artworkByUid) delete incoming.artworkByUid;
+        value=JSON.stringify(incoming);
+      }
+    }
+    return nativeSetItem.call(this,key,value);
+  };
+
+  function saveLocal(){
+    const payload=metadataPayload();
+    if(!payload.drivers.length&&Date.now()>allowEmptyUntil) return null;
+    try{
+      const previous=parsed(localStorage.getItem(COLLECTION_KEY));
+      if(previous&&previous.drivers.length) nativeSetItem.call(localStorage,BACKUP_KEY,JSON.stringify(previous));
+      nativeSetItem.call(localStorage,COLLECTION_KEY,JSON.stringify(payload));
+      if(payload.drivers.length) nativeSetItem.call(localStorage,LAST_GOOD_KEY,JSON.stringify(payload));
+      persistArtwork();
+      return payload;
+    }catch(e){ console.warn("DriverMon metadata save failed",e); return null; }
+  }
+
+  // Prevent every legacy Firebase routine from replacing a real collection with
+  // an automatic empty payload during startup or reconnection.
+  function installFirebaseGuard(){
+    try{
+      if(typeof tradeDb==="undefined"||!tradeDb||tradeDb.__dmV228Guard) return;
+      const originalRef=tradeDb.ref.bind(tradeDb);
+      tradeDb.ref=function(path){
+        const ref=originalRef(path),route=String(path||"");
+        if(route.indexOf(CLOUD_ROOT)===0){
+          const originalSet=ref.set.bind(ref),originalUpdate=ref.update.bind(ref);
+          ref.set=function(value){
+            if(value&&Array.isArray(value.drivers)&&!value.drivers.length&&Date.now()>allowEmptyUntil){ console.warn("DriverMon blocked an automatic empty Firebase save"); return Promise.resolve(null); }
+            return originalSet(value);
+          };
+          ref.update=function(value){
+            if(value&&Array.isArray(value.drivers)&&!value.drivers.length&&Date.now()>allowEmptyUntil){ console.warn("DriverMon blocked an automatic empty Firebase update"); return Promise.resolve(null); }
+            return originalUpdate(value);
+          };
+        }
+        return ref;
+      };
+      tradeDb.__dmV228Guard=true;
+    }catch(e){ console.warn("DriverMon Firebase guard could not start",e); }
+  }
+  async function saveCloud(reason){
+    const payload=cloudPayload();
+    if(!payload.drivers.length&&Date.now()>allowEmptyUntil) return null;
+    const id=playerId(); if(!id||typeof tradeDb==="undefined"||!tradeDb) return payload;
+    try{ await tradeDb.ref(CLOUD_ROOT+"/"+id).set(payload); }
+    catch(e){ console.warn("DriverMon Firebase save failed",reason,e); }
+    try{ if(typeof window.publishPlayerStats==="function") setTimeout(()=>window.publishPlayerStats(),250); }catch(e){}
+    return payload;
+  }
+  function artworkMap(payload){
+    const map={},explicit=payload&&payload.artworkByUid||{};
+    (payload&&payload.drivers||[]).forEach((card,index)=>{
+      const uid=String(card&&card.uid||""); if(!uid) return;
+      const saved=explicit[uid]||{};
+      map[uid]={face:saved.face||card.cardFaceData||"",full:saved.full||card.cardFullData||""};
+    });
+    return map;
+  }
+  function applyPayload(payload){
+    if(!payload||!Array.isArray(payload.drivers)||!payload.drivers.length) return false;
+    const cards=list(); cards.splice(0,cards.length,...payload.drivers.map(card=>Object.assign({},card)));
+    try{ if(typeof nextUid!=="undefined"&&payload.nextUid) nextUid=Math.max(Number(payload.nextUid)||21,21); }catch(e){}
+    bindArtwork(artworkMap(payload));
+    // Do not write blank artwork while the separate image database is still
+    // loading. Save only the small metadata now, then preserve the hydrated
+    // face and original screenshot once they have been restored by card UID.
+    try{
+      const meta=metadataPayload();
+      nativeSetItem.call(localStorage,COLLECTION_KEY,JSON.stringify(meta));
+      nativeSetItem.call(localStorage,LAST_GOOD_KEY,JSON.stringify(meta));
+    }catch(e){ console.warn("DriverMon restored metadata could not be saved",e); }
+    hydrateArtwork().then(()=>persistArtwork());
+    try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
+    return true;
+  }
+  async function safeStartupLoad(){
+    installFirebaseGuard();
+    const current=parsed(localStorage.getItem(COLLECTION_KEY));
+    const lastGood=parsed(localStorage.getItem(LAST_GOOD_KEY));
+    const backup=parsed(localStorage.getItem(BACKUP_KEY));
+    const local=[current,lastGood,backup].find(item=>item&&item.drivers.length);
+    if(local) applyPayload(local);
+    const id=playerId(); if(!id||typeof tradeDb==="undefined"||!tradeDb) return local;
+    try{
+      const snap=await tradeDb.ref(CLOUD_ROOT+"/"+id).once("value"),remote=snap.val();
+      // The device's non-empty collection wins. Firebase is used only to restore
+      // a genuinely empty device, never to erase a populated one.
+      if(!local&&remote&&Array.isArray(remote.drivers)&&remote.drivers.length) applyPayload(remote);
+      return local||remote||null;
+    }catch(e){ console.warn("DriverMon safe startup load failed",e); return local; }
+  }
+
+  installFirebaseGuard();
+  window.saveCollection=saveLocal;
+  window.dmSaveOwnedCollectionToFirebase=saveCloud;
+  window.dmLoadOwnedCollectionFromFirebase=safeStartupLoad;
+  window.dmRepairCardArtwork=function(){ bindArtwork(); persistArtwork(); saveLocal(); try{ renderCards(); }catch(e){} return true; };
+
+  const oldSaveDriverMon=window.saveDriverMon;
+  window.saveDriverMon=function(){
+    const result=typeof oldSaveDriverMon==="function"?oldSaveDriverMon.apply(this,arguments):undefined;
+    bindArtwork(); persistArtwork(); saveLocal(); setTimeout(()=>saveCloud("card-create-or-edit"),120);
+    return result;
+  };
+  const oldDeleteCard=window.deleteCard;
+  window.deleteCard=function(uid){
+    const before=list().some(card=>String(card&&card.uid)===String(uid));
+    allowEmptyUntil=Date.now()+4000;
+    const result=typeof oldDeleteCard==="function"?oldDeleteCard.apply(this,arguments):undefined;
+    const deleted=before&&!list().some(card=>String(card&&card.uid)===String(uid));
+    if(deleted){ removeArtwork(uid); bindArtwork(); saveLocal(); setTimeout(()=>saveCloud("explicit-delete"),120); }
+    else allowEmptyUntil=0;
+    return result;
+  };
+  const oldEditCard=window.editCard;
+  window.editCard=function(uid){
+    bindArtwork();
+    const result=typeof oldEditCard==="function"?oldEditCard.apply(this,arguments):undefined;
+    const card=list().find(item=>String(item&&item.uid)===String(uid));
+    const original=card&&(card.cardFullData||card._starterFullImage||"");
+    const preview=document.getElementById("preview");
+    if(preview) preview.innerHTML=original?'<img src="'+original+'" alt="original uploaded card screenshot">':'<span>Original full screenshot is not stored on this device.</span>';
+    if(card&&!original&&preview){
+      hydrateArtwork().then(()=>{
+        const refreshed=list().find(item=>String(item&&item.uid)===String(uid));
+        const restored=refreshed&&(refreshed.cardFullData||refreshed._starterFullImage||"");
+        if(restored) preview.innerHTML='<img src="'+restored+'" alt="original uploaded card screenshot">';
+      });
+    }
+    return result;
+  };
+
+  window.addEventListener("DOMContentLoaded",()=>{
+    installFirebaseGuard();
+    // Capture artwork upgraded by the older compatibility layer before the
+    // metadata-only startup pass replaces the in-memory card objects.
+    setTimeout(()=>{ bindArtwork(); persistArtwork(); },900);
+    setTimeout(safeStartupLoad,1600);
+    setTimeout(hydrateArtwork,2300);
+  });
+  window.addEventListener("beforeunload",()=>{ if(list().length) saveLocal(); });
+  console.info("DriverMon build",BUILD);
+};
+</script>
+
 <!-- v226: card-ID artwork storage. Images can no longer slide onto another card. -->
 <script>
 (function(){
   const LOCAL_KEY="drivermon_collection_v1";
   const BACKUP_KEY="drivermon_collection_v1_backup";
-  const RESCUE_CURRENT_KEY="drivermon_collection_rescue_v227_current";
-  const RESCUE_BACKUP_KEY="drivermon_collection_rescue_v227_backup";
   const CLOUD_ROOT="trades/__playerCollections";
-  const BUILD="227-guarded-recovery";
-
-  // Recovery lock: no older save hook is allowed to replace a populated
-  // device/cloud collection with an empty or partly loaded runtime collection.
-  window.DRIVERMON_RECOVERY_LOCK=true;
-  try{
-    const rawCurrent=localStorage.getItem(LOCAL_KEY);
-    const rawBackup=localStorage.getItem(BACKUP_KEY);
-    if(rawCurrent&&!localStorage.getItem(RESCUE_CURRENT_KEY)) localStorage.setItem(RESCUE_CURRENT_KEY,rawCurrent);
-    if(rawBackup&&!localStorage.getItem(RESCUE_BACKUP_KEY)) localStorage.setItem(RESCUE_BACKUP_KEY,rawBackup);
-  }catch(e){ console.warn("Could not freeze DriverMon recovery copies",e); }
+  const BUILD="226-card-artwork";
 
   function parseStored(key){
     try{ const value=JSON.parse(localStorage.getItem(key)||"null"); return value&&Array.isArray(value.drivers)?value:null; }
@@ -526,8 +836,6 @@ const tradeDb = firebase.database();
   // to overwrite them during startup.
   const startupCurrent=parseStored(LOCAL_KEY);
   const startupBackup=parseStored(BACKUP_KEY);
-  const rescueCurrent=parseStored(RESCUE_CURRENT_KEY);
-  const rescueBackup=parseStored(RESCUE_BACKUP_KEY);
 
   function cards(){ try{ return (typeof drivers!=="undefined"&&Array.isArray(drivers))?drivers:[]; }catch(e){ return []; } }
   function faces(){ try{ return (typeof faceImages!=="undefined"&&Array.isArray(faceImages))?faceImages:[]; }catch(e){ return []; } }
@@ -536,19 +844,11 @@ const tradeDb = firebase.database();
     if(!card.uid) card.uid="card_fixed_"+Date.now().toString(36)+"_"+index+"_"+Math.random().toString(36).slice(2,7);
     return String(card.uid);
   }
-  function cloudPlayerIds(){
+  function cloudPlayerId(){
     const keys=["drivermonStablePlayerId_v208","drivermonDevicePlayerId","drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId"];
-    const found=[];
-    for(const key of keys){
-      try{
-        const value=localStorage.getItem(key);
-        const clean=value?String(value).replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90):"";
-        if(clean&&!found.includes(clean)) found.push(clean);
-      }catch(e){}
-    }
-    return found;
+    for(const key of keys){ try{ const value=localStorage.getItem(key); if(value) return String(value).replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90); }catch(e){} }
+    return "";
   }
-  function cloudPlayerId(){ return cloudPlayerIds()[0]||""; }
   function artworkFromSnapshot(snapshot){
     const result={};
     if(!snapshot||!Array.isArray(snapshot.drivers)) return result;
@@ -572,11 +872,9 @@ const tradeDb = firebase.database();
     return Object.values(map).reduce((score,item)=>score+(item.face?1:0)+(item.full?5:0),0);
   }
 
-  const startupMaps=[artworkFromSnapshot(startupCurrent),artworkFromSnapshot(startupBackup),artworkFromSnapshot(rescueCurrent),artworkFromSnapshot(rescueBackup)];
+  const startupMaps=[artworkFromSnapshot(startupCurrent),artworkFromSnapshot(startupBackup)];
   startupMaps.sort((a,b)=>artworkScore(b)-artworkScore(a));
-  // Keep every surviving image source. Lower-quality snapshots are applied
-  // first and the strongest snapshot wins whenever two copies share a UID.
-  const recoveryArtwork=Object.assign({},...startupMaps.slice().reverse());
+  const recoveryArtwork=Object.assign({},startupMaps[1]||{},startupMaps[0]||{});
 
   function bindArtwork(preferred){
     const list=cards(), oldFaces=faces(), oldFulls=fulls();
@@ -620,7 +918,6 @@ const tradeDb = firebase.database();
   }
 
   function saveLocal(){
-    if(window.DRIVERMON_RECOVERY_LOCK) return null;
     try{
       const payload=makePayload(true);
       const raw=JSON.stringify(payload);
@@ -631,7 +928,6 @@ const tradeDb = firebase.database();
     }catch(e){ console.warn("Card-linked local save failed",e); return null; }
   }
   async function saveCloud(reason){
-    if(window.DRIVERMON_RECOVERY_LOCK) return null;
     saveLocal();
     const id=cloudPlayerId();
     if(!id||typeof tradeDb==="undefined"||!tradeDb) return null;
@@ -658,7 +954,7 @@ const tradeDb = firebase.database();
     const list=cards(); list.splice(0,list.length,...payload.drivers.map(card=>Object.assign({},card)));
     try{ if(typeof nextUid!=="undefined"&&payload.nextUid) nextUid=Math.max(Number(payload.nextUid)||21,21); }catch(e){}
     bindArtwork(merged);
-    if(!window.DRIVERMON_RECOVERY_LOCK) saveLocal();
+    saveLocal();
     try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
     return true;
   }
@@ -677,91 +973,12 @@ const tradeDb = firebase.database();
     return null;
   }
 
-  function snapshotScore(payload){
-    if(!payload||!Array.isArray(payload.drivers)) return -1;
-    return payload.drivers.length*100000+artworkScore(artworkFromSnapshot(payload));
-  }
-  function bestSnapshot(list){
-    return list.filter(item=>item&&Array.isArray(item.drivers)).sort((a,b)=>snapshotScore(b)-snapshotScore(a))[0]||null;
-  }
-  function writeRecoveredSnapshot(payload,label){
-    if(!payload||!Array.isArray(payload.drivers)) return;
-    try{
-      const safe=makePayload(true);
-      safe.version=227; safe.build=BUILD; safe.recoveredFrom=label||"unknown";
-      safe.recoveredAt=new Date().toISOString();
-      const raw=JSON.stringify(safe);
-      localStorage.setItem(LOCAL_KEY,raw);
-      localStorage.setItem(RESCUE_CURRENT_KEY,raw);
-    }catch(e){ console.warn("Recovered collection could not be stored",e); }
-  }
-  function showRecoveryNotice(count,source){
-    let box=document.getElementById("dmRecoveryNoticeV227");
-    if(!box){
-      box=document.createElement("div"); box.id="dmRecoveryNoticeV227";
-      box.style.cssText="position:fixed;left:10px;right:10px;top:10px;z-index:2147483647;background:#152238;color:#fff;border:2px solid #65c7ff;border-radius:14px;padding:12px 14px;box-shadow:0 8px 28px #0008;font:700 14px/1.35 system-ui;text-align:center";
-      document.body.appendChild(box);
-    }
-    if(count>0){
-      box.innerHTML='Recovery mode: '+count+' cards restored from '+source+'. Saving, editing and deleting are paused while you check them.'+
-        '<div style="display:flex;gap:8px;justify-content:center;margin-top:9px;flex-wrap:wrap">'+
-        '<button onclick="window.dmExportRecoveryBackup()" style="border:0;border-radius:9px;padding:8px 11px;font-weight:900;background:#65c7ff;color:#102038">Export safety backup</button>'+
-        '<button onclick="window.dmFinishRecovery()" style="border:0;border-radius:9px;padding:8px 11px;font-weight:900;background:#7ee08b;color:#102815">Cards look right — unlock</button></div>';
-    }else{
-      box.textContent="Recovery mode is protecting this device. No safe card collection has been found yet, so nothing will be saved or deleted.";
-    }
-  }
-  function publicCardsPayload(row){
-    const publicCards=row&&Array.isArray(row.publicCollection)?row.publicCollection:[];
-    if(!publicCards.length) return null;
-    return {
-      version:227,build:BUILD,drivers:publicCards.map((card,index)=>({
-        uid:String(card.uid||card.key||("public_recovery_"+index)),
-        name:String(card.name||card.driverName||"Recovered Driver"),
-        region:String(card.region||""),type:String(card.type||""),rank:String(card.rank||""),
-        rarity:String(card.rarity||""),level:String(card.level||""),score:Number(card.score||0),
-        power:Number(card.power||card.score||0),shiny:!!card.shiny,
-        cardFaceData:String(card.image||card.face||card.faceData||"")
-      })),artworkByUid:{},faceImages:[],fullImages:[],nextUid:null
-    };
-  }
-  async function readRecoveryCloud(localBest){
-    const ids=cloudPlayerIds();
-    if(!ids.length||typeof tradeDb==="undefined"||!tradeDb) return localBest;
-    const ownedCopies=[], publicCopies=[];
-    for(const id of ids){
-      try{ ownedCopies.push((await tradeDb.ref(CLOUD_ROOT+"/"+id).once("value")).val()); }catch(e){ console.warn("Recovery cloud read failed",id,e); }
-      try{ publicCopies.push(publicCardsPayload((await tradeDb.ref("trades/__leaderboardPlayers/"+id).once("value")).val())); }catch(e){ console.warn("Public recovery read failed",id,e); }
-    }
-    // A public leaderboard copy contains only a face and summary stats. Never
-    // replace a real device/owned collection (with editable source screenshots)
-    // merely because the public copy happens to contain one extra card.
-    const ownedBest=bestSnapshot([localBest,...ownedCopies]);
-    if(ownedBest&&ownedBest.drivers.length) return ownedBest;
-    return bestSnapshot(publicCopies)||ownedBest||localBest;
-  }
-
   // Replace the final public persistence functions so old numbered-array saves
   // cannot overwrite the repaired card-ID format again.
   window.saveCollection=function(){ const value=saveLocal(); setTimeout(()=>saveCloud("saveCollection"),80); return value; };
   window.dmSaveOwnedCollectionToFirebase=saveCloud;
   window.dmLoadOwnedCollectionFromFirebase=loadCloudStable;
-  window.dmRepairCardArtwork=function(){ bindArtwork(recoveryArtwork); try{ renderCards(); }catch(e){} return true; };
-  window.dmExportRecoveryBackup=function(){
-    try{ if(typeof window.exportDriverMonBackup==="function") return window.exportDriverMonBackup(); }catch(e){}
-    alert("The backup button is still loading. Wait a moment and try again.");
-  };
-  window.dmFinishRecovery=function(){
-    if(!cards().length){ alert("There are no recovered cards to unlock yet."); return false; }
-    if(!confirm("Only unlock after you have checked several names and faces and exported a safety backup. Unlock this collection now?")) return false;
-    window.DRIVERMON_RECOVERY_LOCK=false;
-    saveLocal();
-    setTimeout(function(){ saveCloud("recovery-confirmed"); },100);
-    setTimeout(function(){ try{ if(typeof window.dmStartTransferWatch==="function") window.dmStartTransferWatch(); }catch(e){} },250);
-    const box=document.getElementById("dmRecoveryNoticeV227"); if(box) box.remove();
-    alert("Collection unlocked and safely saved by permanent card ID.");
-    return true;
-  };
+  window.dmRepairCardArtwork=function(){ bindArtwork(recoveryArtwork); saveLocal(); try{ renderCards(); }catch(e){} return true; };
 
   const originalEdit=window.editCard;
   window.editCard=function(cardUid){
@@ -776,29 +993,18 @@ const tradeDb = firebase.database();
 
   const originalSaveDriverMon=window.saveDriverMon;
   window.saveDriverMon=function(){
-    if(window.DRIVERMON_RECOVERY_LOCK){ alert("Recovery mode is protecting your cards. Check the restored collection and export a backup before editing."); return false; }
     const result=typeof originalSaveDriverMon==="function"?originalSaveDriverMon.apply(this,arguments):undefined;
     bindArtwork(); saveLocal(); setTimeout(()=>saveCloud("card-create-or-edit"),80);
     return result;
   };
 
   window.addEventListener("DOMContentLoaded",function(){
-    async function recoverNow(){
-      const localBest=bestSnapshot([startupCurrent,startupBackup,rescueCurrent,rescueBackup]);
-      if(localBest) applyPayload(localBest,true);
-      const best=await readRecoveryCloud(localBest);
-      if(best) applyPayload(best,true);
-      bindArtwork(recoveryArtwork);
-      writeRecoveredSnapshot(best||localBest,best===localBest?"device backup":"Firebase recovery copy");
-      try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
-      showRecoveryNotice(cards().length,best===localBest?"the safest device backup":"the safest available backup");
-    }
-    // Run once quickly, then again after Firebase has had time to initialise.
-    // Both passes remain read-only while recovery mode is locked.
-    setTimeout(recoverNow,700);
-    setTimeout(recoverNow,3500);
+    // The older cloud loader runs at 350 ms. Re-apply the pre-cloud device
+    // artwork by card UID afterwards, then upgrade Firebase to the safe format.
+    setTimeout(function(){ bindArtwork(recoveryArtwork); saveLocal(); try{ renderCards(); }catch(e){} },700);
+    setTimeout(loadCloudStable,1100);
   });
-  window.addEventListener("beforeunload",function(){ if(!window.DRIVERMON_RECOVERY_LOCK) saveLocal(); });
+  window.addEventListener("beforeunload",saveLocal);
   window.dmV226Core={bindArtwork,saveLocal,saveCloud,loadCloudStable,applyPayload,cards};
   console.info("DriverMon build",BUILD);
 })();
@@ -809,7 +1015,6 @@ const tradeDb = firebase.database();
 (function(){
   const COLLECTION_BACKUP_KEY="drivermon_collection_v1_backup";
   function repairArtworkFromPreviousSnapshot(){
-    if(window.DRIVERMON_RECOVERY_LOCK) return false;
     try{
       if(typeof drivers==="undefined" || !Array.isArray(drivers) || !Array.isArray(faceImages)) return false;
       const previous=JSON.parse(localStorage.getItem(COLLECTION_BACKUP_KEY)||"null");
@@ -869,7 +1074,6 @@ const tradeDb = firebase.database();
     }catch(error){ console.warn("Previous artwork snapshot could not be used",error); return false; }
   }
   function bindExistingArtwork(){
-    if(window.DRIVERMON_RECOVERY_LOCK) return;
     try{
       if(typeof drivers==="undefined" || !Array.isArray(drivers)) return;
       let changed=false;
@@ -920,7 +1124,6 @@ const tradeDb = firebase.database();
     card._starterFullImage=full;
   }
   function repairStarterBundles(){
-    if(window.DRIVERMON_RECOVERY_LOCK) return false;
     const bundles=Array.isArray(window.DRIVERMON_STARTER_BUNDLES)?window.DRIVERMON_STARTER_BUNDLES:[];
     const current=safeArrays();
     if(!bundles.length||!current.cards||!current.faces||!current.fulls) return false;
@@ -1045,7 +1248,6 @@ const tradeDb = firebase.database();
     });
   }
   function removeTransferredLocal(snapshotValue){
-    if(window.DRIVERMON_RECOVERY_LOCK) return false;
     const marks=snapshotValue||{}, ids=new Set(Object.keys(marks).map(k=>String(marks[k]&&marks[k].sourceUid||k)));
     if(!ids.size) return false;
     const list=localCards(); const before=list.length;
@@ -1056,7 +1258,6 @@ const tradeDb = firebase.database();
     return true;
   }
   function watchMyTransfers(){
-    if(window.DRIVERMON_RECOVERY_LOCK) return;
     if(typeof tradeDb==="undefined"||!tradeDb||!playerId()) return;
     const ref=tradeDb.ref(TRANSFER_ROOT+"/"+playerId());
     ref.on("value",snap=>removeTransferredLocal(snap.val()),e=>console.warn("Transfer sync failed",e));
@@ -1064,7 +1265,6 @@ const tradeDb = firebase.database();
   }
 
   window.v219CreateTradeCode=window.createTradeCode=function(uid,button){
-    if(window.DRIVERMON_RECOVERY_LOCK){ alert("Recovery mode is protecting this collection. Finish checking and unlock it before trading."); return; }
     const status=document.getElementById("tradeStatus");
     if(typeof tradeDb==="undefined"||!tradeDb){ alert("Trading is not connected to Firebase yet."); return; }
     const card=localCards().find(d=>String(d.uid)===String(uid));
@@ -1094,7 +1294,6 @@ const tradeDb = firebase.database();
   };
 
   window.v219ClaimTradeCode=window.claimTradeCode=async function(){
-    if(window.DRIVERMON_RECOVERY_LOCK){ alert("Recovery mode is protecting this collection. Finish checking and unlock it before trading."); return; }
     const input=document.getElementById("tradeCodeInput"), status=document.getElementById("tradeStatus");
     let code=normalise(input&&input.value);
     if(!code){ if(status) status.textContent="Enter a trade code first."; return; }
@@ -1127,7 +1326,6 @@ const tradeDb = firebase.database();
     }
   };
 
-  window.dmStartTransferWatch=watchMyTransfers;
   window.addEventListener("load",watchMyTransfers);
 })();
 </script>
@@ -1688,7 +1886,6 @@ document.getElementById("editStatus").textContent="";
 setNameRank(5);}
 function clearFilters(){document.getElementById("search").value="";document.getElementById("rarityFilter").value="All";document.getElementById("typeFilter").value="All";renderCards();}
 function deleteCard(uid){
-  if(window.DRIVERMON_RECOVERY_LOCK){alert("Recovery mode is protecting your cards. Check the restored collection and export a backup before deleting anything.");return;}
   const index=drivers.findIndex(d=>d.uid===uid);
   if(index===-1){alert("Could not find this card.");return;}
   if(!confirm("Delete this DriverMon card?"))return;
@@ -1996,10 +2193,6 @@ function resetCollection(){ hardResetDriverMonCollection(); }
 
 /* === RESET BUTTON FIX === */
 function hardResetDriverMonCollection(){
-  if(window.DRIVERMON_RECOVERY_LOCK){
-    window.alert("Recovery mode is protecting your cards. Export a safety backup and confirm the restored cards before resetting anything.");
-    return;
-  }
   const first = window.confirm("Are you sure you want to reset your DriverMon collection on this device?");
   if(!first) return;
 
@@ -6477,7 +6670,6 @@ window.addEventListener("load", ()=>{
 
   // On first launch, store the 3 assigned starters. On later launches, restore the saved collection.
   window.addEventListener("DOMContentLoaded", function(){
-    if(window.DRIVERMON_RECOVERY_LOCK) return;
     const hadSaved = loadCollectionIfSaved();
 
     if(!hadSaved){
@@ -6634,7 +6826,7 @@ window.addEventListener("load", ()=>{
   };
 
   // Save after claiming/deleting through existing flows.
-  window.addEventListener("beforeunload", function(){ if(!window.DRIVERMON_RECOVERY_LOCK) saveCollection(); });
+  window.addEventListener("beforeunload", saveCollection);
 })();
 </script>
 
@@ -8311,7 +8503,6 @@ window.addEventListener("DOMContentLoaded", function(){
     return tradeDb.ref(COLLECTION_ROOT + "/" + safeKey(playerId()));
   }
   async function saveOwnedCollection(reason){
-    if(window.DRIVERMON_RECOVERY_LOCK) return null;
     if(bootstrapping && reason !== "initial-seed") return null;
     const ref=collectionRef();
     const payload=collectionPayload();
@@ -8327,7 +8518,6 @@ window.addEventListener("DOMContentLoaded", function(){
     return payload;
   }
   async function loadOwnedCollection(){
-    if(window.DRIVERMON_RECOVERY_LOCK) return null;
     const ref=collectionRef();
     let remote=null;
     if(ref){
@@ -8343,7 +8533,6 @@ window.addEventListener("DOMContentLoaded", function(){
     return saveOwnedCollection("initial-seed");
   }
   async function clearOwnedCollection(){
-    if(window.DRIVERMON_RECOVERY_LOCK){ alert("Recovery mode is protecting this collection from being cleared."); return null; }
     try{ localStorage.removeItem(LOCAL_KEY); }catch(e){}
     const ref=collectionRef();
     if(ref){ try{ await ref.remove(); }catch(e){ console.warn("Firebase collection clear failed", e); } }
@@ -8355,7 +8544,6 @@ window.addEventListener("DOMContentLoaded", function(){
 
   const oldSaveCollection = window.saveCollection;
   window.saveCollection = function(){
-    if(window.DRIVERMON_RECOVERY_LOCK) return null;
     let r;
     try{ if(typeof oldSaveCollection === "function") r=oldSaveCollection.apply(this, arguments); }catch(e){ console.warn("old saveCollection failed", e); }
     try{ saveOwnedCollection("saveCollection"); }catch(e){}
@@ -8365,7 +8553,6 @@ window.addEventListener("DOMContentLoaded", function(){
   const oldSaveDriverMon = window.saveDriverMon;
   if(typeof oldSaveDriverMon === "function"){
     window.saveDriverMon = function(){
-      if(window.DRIVERMON_RECOVERY_LOCK){ alert("Recovery mode is protecting your cards. Check the restored collection and export a backup before editing."); return false; }
       const result=oldSaveDriverMon.apply(this, arguments);
       try{ saveOwnedCollection("saveDriverMon"); }catch(e){}
       return result;
@@ -8374,9 +8561,9 @@ window.addEventListener("DOMContentLoaded", function(){
 
   window.addEventListener("DOMContentLoaded", function(){
     // Let the older local starter/local loader run first, then replace with Firebase if present.
-    if(!window.DRIVERMON_RECOVERY_LOCK) setTimeout(()=>{ loadOwnedCollection(); }, 350);
+    setTimeout(()=>{ loadOwnedCollection(); }, 350);
   });
-  window.addEventListener("beforeunload", function(){ if(!window.DRIVERMON_RECOVERY_LOCK){ try{ saveOwnedCollection("beforeunload"); }catch(e){} } });
+  window.addEventListener("beforeunload", function(){ try{ saveOwnedCollection("beforeunload"); }catch(e){} });
 })();
 </script>
 
@@ -11261,7 +11448,6 @@ img[alt="DriverDex"]{
   }
   function driversNow(){ try{ if(Array.isArray(window.drivers)) return window.drivers; }catch(e){} try{ if(typeof drivers!=="undefined" && Array.isArray(drivers)) return drivers; }catch(e){} return []; }
   function robustSaveCollection(){
-    if(window.DRIVERMON_RECOVERY_LOCK) return null;
     try{
       const payload={
         drivers: driversNow(),
@@ -11286,7 +11472,6 @@ img[alt="DriverDex"]{
     }catch(e){ console.warn("v204 collection save failed", e); }
   }
   function restoreBackupIfNeeded(){
-    if(window.DRIVERMON_RECOVERY_LOCK) return false;
     try{
       const cur=JSON.parse(localStorage.getItem(COLLECTION_KEY)||"null");
       const bak=JSON.parse(localStorage.getItem(COLLECTION_BACKUP_KEY)||"null");
@@ -11304,7 +11489,6 @@ img[alt="DriverDex"]{
   }
   const oldSave=window.saveCollection;
   window.saveCollection=function(){
-    if(window.DRIVERMON_RECOVERY_LOCK) return null;
     let r;
     try{ if(typeof oldSave==="function") r=oldSave.apply(this, arguments); }catch(e){ console.warn("old saveCollection failed", e); }
     robustSaveCollection();
@@ -11314,7 +11498,6 @@ img[alt="DriverDex"]{
   // Watch for card changes in case an old add-card flow forgets to call saveCollection.
   let lastSig="";
   function watchSave(){
-    if(window.DRIVERMON_RECOVERY_LOCK) return;
     try{
       const sig=JSON.stringify(driversNow().map(d=>[d&&d.uid,d&&d.name,d&&d.region,d&&d.power,d&&d.score,d&&d.shiny]).slice(-300));
       if(sig!==lastSig){ lastSig=sig; robustSaveCollection(); }
@@ -11382,7 +11565,6 @@ img[alt="DriverDex"]{
     return cards*1e12 + hasImg*1e15 + num(r&&r.battleRating,1000)*1e6 + upd;
   }
   function cleanupDuplicateFirebaseRows(){
-    if(window.DRIVERMON_RECOVERY_LOCK) return Promise.resolve([]);
     if(typeof tradeDb==="undefined"||!tradeDb) return Promise.resolve();
     return tradeDb.ref(LB_PATH).once("value").then(snap=>{
       const val=snap.val()||{}, groups=[];
@@ -11416,7 +11598,6 @@ img[alt="DriverDex"]{
     }).catch(e=>console.warn("v204 duplicate cleanup failed", e));
   }
   function publishCanonicalPlayer(){
-    if(window.DRIVERMON_RECOVERY_LOCK) return Promise.resolve(currentRow());
     if(typeof tradeDb==="undefined"||!tradeDb) return Promise.resolve(currentRow());
     const row=currentRow();
     return tradeDb.ref(LB_PATH+"/"+safe(row.id)).update(row)
@@ -11429,7 +11610,6 @@ img[alt="DriverDex"]{
   window.drivermonCleanupDuplicatePlayers=cleanupDuplicateFirebaseRows;
   window.drivermonForceSaveCollection=robustSaveCollection;
   window.addEventListener("load", function(){
-    if(window.DRIVERMON_RECOVERY_LOCK) return;
     restoreBackupIfNeeded();
     robustSaveCollection();
     setTimeout(publishCanonicalPlayer, 800);
@@ -11438,7 +11618,7 @@ img[alt="DriverDex"]{
     setTimeout(cleanupDuplicateFirebaseRows, 8000);
     setInterval(watchSave, 2500);
   });
-  window.addEventListener("beforeunload", function(){ if(!window.DRIVERMON_RECOVERY_LOCK){ try{ robustSaveCollection(); }catch(e){} } });
+  window.addEventListener("beforeunload", function(){ try{ robustSaveCollection(); }catch(e){} });
 })();
 </script>
 
@@ -11524,7 +11704,6 @@ if(dmDexMenuImage) dmDexMenuImage.src='data:image/png;base64,iVBORw0KGgoAAAANSUh
 
   const finalEditCard=window.editCard;
   window.editCard=function(uid){
-    if(window.DRIVERMON_RECOVERY_LOCK){ alert("Recovery mode is protecting your cards. Check the restored collection and export a backup before editing."); return false; }
     core.bindArtwork();
     const result=typeof finalEditCard==="function"?finalEditCard.apply(this,arguments):undefined;
     const card=core.cards().find(item=>String(item&&item.uid)===String(uid));
@@ -11540,7 +11719,6 @@ if(dmDexMenuImage) dmDexMenuImage.src='data:image/png;base64,iVBORw0KGgoAAAANSUh
 
   const finalSaveDriverMon=window.saveDriverMon;
   window.saveDriverMon=function(){
-    if(window.DRIVERMON_RECOVERY_LOCK){ alert("Recovery mode is protecting your cards. Check the restored collection and export a backup before editing."); return false; }
     const result=typeof finalSaveDriverMon==="function"?finalSaveDriverMon.apply(this,arguments):undefined;
     core.bindArtwork();
     core.saveLocal();
@@ -11549,7 +11727,6 @@ if(dmDexMenuImage) dmDexMenuImage.src='data:image/png;base64,iVBORw0KGgoAAAANSUh
   };
 
   window.saveCollection=function(){
-    if(window.DRIVERMON_RECOVERY_LOCK) return null;
     const result=core.saveLocal();
     setTimeout(function(){ core.saveCloud("saveCollection"); },80);
     return result;
@@ -11557,4 +11734,9 @@ if(dmDexMenuImage) dmDexMenuImage.src='data:image/png;base64,iVBORw0KGgoAAAANSUh
   window.dmSaveOwnedCollectionToFirebase=core.saveCloud;
   window.dmLoadOwnedCollectionFromFirebase=core.loadCloudStable;
 })();
+</script>
+
+<!-- v228 is installed last so no older compatibility patch can replace it. -->
+<script>
+if(typeof window.dmV228Install==="function") window.dmV228Install();
 </script>
