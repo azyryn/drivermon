@@ -497,6 +497,197 @@ const tradeDb = firebase.database();
 })();
 </script>
 
+<!-- v226: card-ID artwork storage. Images can no longer slide onto another card. -->
+<script>
+(function(){
+  const LOCAL_KEY="drivermon_collection_v1";
+  const BACKUP_KEY="drivermon_collection_v1_backup";
+  const CLOUD_ROOT="trades/__playerCollections";
+  const BUILD="226-card-artwork";
+
+  function parseStored(key){
+    try{ const value=JSON.parse(localStorage.getItem(key)||"null"); return value&&Array.isArray(value.drivers)?value:null; }
+    catch(e){ return null; }
+  }
+
+  // Capture both device copies before any older Firebase loader gets a chance
+  // to overwrite them during startup.
+  const startupCurrent=parseStored(LOCAL_KEY);
+  const startupBackup=parseStored(BACKUP_KEY);
+
+  function cards(){ try{ return (typeof drivers!=="undefined"&&Array.isArray(drivers))?drivers:[]; }catch(e){ return []; } }
+  function faces(){ try{ return (typeof faceImages!=="undefined"&&Array.isArray(faceImages))?faceImages:[]; }catch(e){ return []; } }
+  function fulls(){ try{ return (typeof fullImages!=="undefined"&&Array.isArray(fullImages))?fullImages:[]; }catch(e){ return []; } }
+  function uid(card,index){
+    if(!card.uid) card.uid="card_fixed_"+Date.now().toString(36)+"_"+index+"_"+Math.random().toString(36).slice(2,7);
+    return String(card.uid);
+  }
+  function cloudPlayerId(){
+    const keys=["drivermonStablePlayerId_v208","drivermonDevicePlayerId","drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId"];
+    for(const key of keys){ try{ const value=localStorage.getItem(key); if(value) return String(value).replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90); }catch(e){} }
+    return "";
+  }
+  function artworkFromSnapshot(snapshot){
+    const result={};
+    if(!snapshot||!Array.isArray(snapshot.drivers)) return result;
+    const sf=Array.isArray(snapshot.faceImages)?snapshot.faceImages:[];
+    const sl=Array.isArray(snapshot.fullImages)?snapshot.fullImages:[];
+    const explicit=snapshot.artworkByUid&&typeof snapshot.artworkByUid==="object"?snapshot.artworkByUid:{};
+    snapshot.drivers.forEach((card,index)=>{
+      if(!card) return;
+      const key=String(card.uid||""); if(!key) return;
+      const saved=explicit[key]||{};
+      const fi=Number(card.imageFaceIndex!=null?card.imageFaceIndex:(card.img!=null?card.img:index));
+      const oi=Number(card.imageFullIndex!=null?card.imageFullIndex:(card.img!=null?card.img:index));
+      result[key]={
+        face:saved.face||card.cardFaceData||card._starterFaceImage||sf[fi]||"",
+        full:saved.full||card.cardFullData||card._starterFullImage||sl[oi]||""
+      };
+    });
+    return result;
+  }
+  function artworkScore(map){
+    return Object.values(map).reduce((score,item)=>score+(item.face?1:0)+(item.full?5:0),0);
+  }
+
+  const startupMaps=[artworkFromSnapshot(startupCurrent),artworkFromSnapshot(startupBackup)];
+  startupMaps.sort((a,b)=>artworkScore(b)-artworkScore(a));
+  const recoveryArtwork=Object.assign({},startupMaps[1]||{},startupMaps[0]||{});
+
+  function bindArtwork(preferred){
+    const list=cards(), oldFaces=faces(), oldFulls=fulls();
+    const rebuiltFaces=[], rebuiltFulls=[];
+    list.forEach((card,index)=>{
+      if(!card) return;
+      const key=uid(card,index);
+      const stored=(preferred&&preferred[key])||{};
+      const recovered=recoveryArtwork[key]||{};
+      const fi=Number(card.imageFaceIndex!=null?card.imageFaceIndex:(card.img!=null?card.img:index));
+      const oi=Number(card.imageFullIndex!=null?card.imageFullIndex:(card.img!=null?card.img:index));
+      const face=stored.face||card.cardFaceData||card._starterFaceImage||oldFaces[fi]||recovered.face||"";
+      const full=stored.full||card.cardFullData||card._starterFullImage||oldFulls[oi]||recovered.full||"";
+      card.cardFaceData=face;
+      if(full) card.cardFullData=full;
+      card.imageKey="artwork_uid_"+key;
+      card.img=index;
+      card.imageFaceIndex=index;
+      card.imageFullIndex=index;
+      rebuiltFaces[index]=face;
+      rebuiltFulls[index]=full;
+    });
+    oldFaces.splice(0,oldFaces.length,...rebuiltFaces);
+    oldFulls.splice(0,oldFulls.length,...rebuiltFulls);
+  }
+
+  function makePayload(includeFull){
+    bindArtwork();
+    const artworkByUid={};
+    const ds=cards().map((card,index)=>{
+      const key=uid(card,index);
+      artworkByUid[key]={face:card.cardFaceData||""};
+      if(includeFull&&card.cardFullData) artworkByUid[key].full=card.cardFullData;
+      const copy=Object.assign({},card);
+      delete copy.cardFaceData; delete copy.cardFullData;
+      delete copy._tradeFaceImage; delete copy._tradeFullImage;
+      delete copy.tradeFaceImage; delete copy.tradeFullImage;
+      return copy;
+    });
+    return {version:226,build:BUILD,playerId:cloudPlayerId(),drivers:ds,artworkByUid,nextUid:(typeof nextUid!=="undefined"?nextUid:null),updatedAt:Date.now(),updatedIso:new Date().toISOString(),faceImages:[],fullImages:[]};
+  }
+
+  function saveLocal(){
+    try{
+      const payload=makePayload(true);
+      const raw=JSON.stringify(payload);
+      const previous=localStorage.getItem(LOCAL_KEY);
+      if(previous&&previous!==raw) localStorage.setItem(BACKUP_KEY,previous);
+      localStorage.setItem(LOCAL_KEY,raw);
+      return payload;
+    }catch(e){ console.warn("Card-linked local save failed",e); return null; }
+  }
+  async function saveCloud(reason){
+    saveLocal();
+    const id=cloudPlayerId();
+    if(!id||typeof tradeDb==="undefined"||!tradeDb) return null;
+    const payload=makePayload(false);
+    try{ await tradeDb.ref(CLOUD_ROOT+"/"+id).set(payload); console.info("DriverMon stable artwork saved",reason); }
+    catch(e){ console.warn("Stable Firebase collection save failed",e); }
+    try{ if(typeof window.publishPlayerStats==="function") setTimeout(()=>window.publishPlayerStats(),250); }catch(e){}
+    return payload;
+  }
+  function applyPayload(payload,keepLocalFull){
+    if(!payload||!Array.isArray(payload.drivers)) return false;
+    const localMap=keepLocalFull?artworkFromSnapshot(parseStored(LOCAL_KEY)):{};
+    const remoteMap=artworkFromSnapshot(payload);
+    const remoteHasStableArtwork=Number(payload.version)>=226&&payload.artworkByUid&&typeof payload.artworkByUid==="object";
+    const merged={};
+    payload.drivers.forEach(card=>{
+      const key=String(card&&card.uid||"");
+      const remote=remoteMap[key]||{}, local=localMap[key]||recoveryArtwork[key]||{};
+      merged[key]={
+        face:remoteHasStableArtwork?(remote.face||local.face||""):(local.face||recoveryArtwork[key]?.face||remote.face||""),
+        full:local.full||recoveryArtwork[key]?.full||remote.full||""
+      };
+    });
+    const list=cards(); list.splice(0,list.length,...payload.drivers.map(card=>Object.assign({},card)));
+    try{ if(typeof nextUid!=="undefined"&&payload.nextUid) nextUid=Math.max(Number(payload.nextUid)||21,21); }catch(e){}
+    bindArtwork(merged);
+    saveLocal();
+    try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
+    return true;
+  }
+  async function loadCloudStable(){
+    const id=cloudPlayerId();
+    if(!id||typeof tradeDb==="undefined"||!tradeDb) return null;
+    try{
+      const snapshot=await tradeDb.ref(CLOUD_ROOT+"/"+id).once("value"), remote=snapshot.val();
+      if(remote&&Array.isArray(remote.drivers)&&remote.drivers.length){
+        applyPayload(remote,true);
+        await saveCloud("v226-upgrade");
+        return remote;
+      }
+      await saveCloud("v226-first-save");
+    }catch(e){ console.warn("Stable Firebase collection load failed",e); }
+    return null;
+  }
+
+  // Replace the final public persistence functions so old numbered-array saves
+  // cannot overwrite the repaired card-ID format again.
+  window.saveCollection=function(){ const value=saveLocal(); setTimeout(()=>saveCloud("saveCollection"),80); return value; };
+  window.dmSaveOwnedCollectionToFirebase=saveCloud;
+  window.dmLoadOwnedCollectionFromFirebase=loadCloudStable;
+  window.dmRepairCardArtwork=function(){ bindArtwork(recoveryArtwork); saveLocal(); try{ renderCards(); }catch(e){} return true; };
+
+  const originalEdit=window.editCard;
+  window.editCard=function(cardUid){
+    bindArtwork();
+    const result=typeof originalEdit==="function"?originalEdit.apply(this,arguments):undefined;
+    const card=cards().find(item=>String(item&&item.uid)===String(cardUid));
+    const original=card&&(card.cardFullData||card._starterFullImage||"");
+    const preview=document.getElementById("preview");
+    if(preview) preview.innerHTML=original?`<img src="${original}" alt="original uploaded card screenshot">`:`<span>Original full screenshot is not stored on this device.</span>`;
+    return result;
+  };
+
+  const originalSaveDriverMon=window.saveDriverMon;
+  window.saveDriverMon=function(){
+    const result=typeof originalSaveDriverMon==="function"?originalSaveDriverMon.apply(this,arguments):undefined;
+    bindArtwork(); saveLocal(); setTimeout(()=>saveCloud("card-create-or-edit"),80);
+    return result;
+  };
+
+  window.addEventListener("DOMContentLoaded",function(){
+    // The older cloud loader runs at 350 ms. Re-apply the pre-cloud device
+    // artwork by card UID afterwards, then upgrade Firebase to the safe format.
+    setTimeout(function(){ bindArtwork(recoveryArtwork); saveLocal(); try{ renderCards(); }catch(e){} },700);
+    setTimeout(loadCloudStable,1100);
+  });
+  window.addEventListener("beforeunload",saveLocal);
+  window.dmV226Core={bindArtwork,saveLocal,saveCloud,loadCloudStable,applyPayload,cards};
+  console.info("DriverMon build",BUILD);
+})();
+</script>
+
 <!-- v225: stable per-card artwork binding -->
 <script>
 (function(){
@@ -11180,5 +11371,45 @@ if(dmDexMenuImage) dmDexMenuImage.src='data:image/png;base64,iVBORw0KGgoAAAANSUh
     reader.onerror=function(){ alert("The selected backup file could not be read."); if(input) input.value=""; };
     reader.readAsText(file);
   };
+})();
+</script>
+
+<!-- v226 final hooks: installed after every older DriverMon patch. -->
+<script>
+(function(){
+  const core=window.dmV226Core;
+  if(!core) return;
+
+  const finalEditCard=window.editCard;
+  window.editCard=function(uid){
+    core.bindArtwork();
+    const result=typeof finalEditCard==="function"?finalEditCard.apply(this,arguments):undefined;
+    const card=core.cards().find(item=>String(item&&item.uid)===String(uid));
+    const original=card&&(card.cardFullData||card._starterFullImage||"");
+    const preview=document.getElementById("preview");
+    if(preview){
+      preview.innerHTML=original
+        ? '<img src="'+original+'" alt="original uploaded card screenshot">'
+        : '<span>Original full screenshot is not stored on this device.</span>';
+    }
+    return result;
+  };
+
+  const finalSaveDriverMon=window.saveDriverMon;
+  window.saveDriverMon=function(){
+    const result=typeof finalSaveDriverMon==="function"?finalSaveDriverMon.apply(this,arguments):undefined;
+    core.bindArtwork();
+    core.saveLocal();
+    setTimeout(function(){ core.saveCloud("card-create-or-edit"); },80);
+    return result;
+  };
+
+  window.saveCollection=function(){
+    const result=core.saveLocal();
+    setTimeout(function(){ core.saveCloud("saveCollection"); },80);
+    return result;
+  };
+  window.dmSaveOwnedCollectionToFirebase=core.saveCloud;
+  window.dmLoadOwnedCollectionFromFirebase=core.loadCloudStable;
 })();
 </script>
