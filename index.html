@@ -508,6 +508,14 @@ const tradeDb = firebase.database();
     for(const k of keys){ try{ const v=localStorage.getItem(k); if(v) return safe(v); }catch(e){} }
     return "";
   }
+  function tradeDeviceId(){
+    const key="dmTradeDeviceToken_v221";
+    try{
+      let id=localStorage.getItem(key);
+      if(!id){ id="device_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,10); localStorage.setItem(key,id); }
+      return safe(id);
+    }catch(e){ return "device_"+Math.random().toString(36).slice(2,10); }
+  }
   function localCards(){ try{ if(typeof drivers!=="undefined"&&Array.isArray(drivers)) return drivers; }catch(e){} return []; }
   function normalise(value){
     if(typeof window.normaliseTradeCode==="function") return window.normaliseTradeCode(value);
@@ -564,7 +572,7 @@ const tradeDb = firebase.database();
     if(!sender){ alert("Create your player profile before trading."); return; }
     window.makeUniqueTradeCode().then(code=>{
       const tradeCard=typeof window.cloneCardForTrade==="function"?window.cloneCardForTrade(card):JSON.parse(JSON.stringify(card));
-      return tradeDb.ref("trades/"+code).set({code,card:tradeCard,senderId:sender,sourceUid:String(card.uid),createdAt:new Date().toISOString(),claimed:false}).then(()=>{
+      return tradeDb.ref("trades/"+code).set({code,card:tradeCard,senderId:sender,senderDeviceId:tradeDeviceId(),sourceUid:String(card.uid),createdAt:new Date().toISOString(),claimed:false}).then(()=>{
         if(navigator.clipboard) navigator.clipboard.writeText(code).catch(()=>{});
         alert("Trade code created:\n\n"+code+"\n\nThe card will leave your collection when another player claims it.");
       });
@@ -576,16 +584,19 @@ const tradeDb = firebase.database();
     const code=normalise(input&&input.value); if(!code){ if(status) status.textContent="Enter a trade code first."; return; }
     if(typeof tradeDb==="undefined"||!tradeDb){ if(status) status.textContent="Trading is not connected to Firebase."; return; }
     const recipient=playerId(); if(!recipient){ if(status) status.textContent="Create your player profile before claiming a card."; return; }
+    const recipientDevice=tradeDeviceId();
     if(status) status.textContent="Claiming card...";
     const ref=tradeDb.ref("trades/"+code);
     ref.transaction(trade=>{
-      if(!trade||!trade.card||!trade.senderId||!trade.sourceUid||trade.claimed||safe(trade.senderId)===safe(recipient)) return;
+      const sameCreatingDevice=safe(trade&&trade.senderId)===safe(recipient) && (!trade.senderDeviceId||safe(trade.senderDeviceId)===safe(recipientDevice));
+      if(!trade||!trade.card||!trade.senderId||!trade.sourceUid||trade.claimed||sameCreatingDevice) return;
       trade.claimed=true; trade.claimedAt=new Date().toISOString(); trade.claimedBy=recipient; return trade;
     },async(error,committed,snapshot)=>{
       if(error){ if(status) status.textContent="Could not claim trade. Check your connection."; return; }
       const trade=snapshot&&snapshot.val();
       if(!committed){
-        if(status) status.textContent=trade&&safe(trade.senderId)===safe(recipient)?"You cannot claim your own trade code.":"That code is invalid or has already been claimed.";
+        const sameCreatingDevice=trade&&safe(trade.senderId)===safe(recipient)&&(!trade.senderDeviceId||safe(trade.senderDeviceId)===safe(recipientDevice));
+        if(status) status.textContent=sameCreatingDevice?"Open this code on the other device to claim it.":(trade&&trade.claimed?"That trade code has already been claimed.":"That trade code could not be found.");
         return;
       }
       const card=receivedCard(trade.card); localCards().push(card);
@@ -1341,6 +1352,9 @@ drivers.forEach(d=>{
 
   function cleanStarterCard(card, index){
     const clone = JSON.parse(JSON.stringify(card));
+    const imageIndex = Number(card && card.img);
+    clone._starterFaceImage = (typeof faceImages !== "undefined" && faceImages[imageIndex]) ? faceImages[imageIndex] : "";
+    clone._starterFullImage = (typeof fullImages !== "undefined" && fullImages[imageIndex]) ? fullImages[imageIndex] : clone._starterFaceImage;
     clone.uid = "starter_" + index + "_" + clone.uid;
     clone.starterCard = true;
     clone.originalStarterUid = card.uid;
@@ -1350,6 +1364,39 @@ drivers.forEach(d=>{
     delete clone.country;
 
     return clone;
+  }
+
+  function repairAndInstallStarter(savedCard, index, pool){
+    const saved = savedCard && typeof savedCard === "object" ? savedCard : {};
+    const originalUid = saved.originalStarterUid || String(saved.uid || "").replace(/^starter_\d+_/, "");
+    const canonical = pool.find(card => String(card && card.uid) === String(originalUid));
+    let repaired;
+
+    if(canonical){
+      // Keep earned gameplay progress, but always restore the original person's
+      // identity, input statistics and matched image from the built-in card.
+      repaired = Object.assign({}, saved, JSON.parse(JSON.stringify(canonical)));
+      repaired.uid = saved.uid || ("starter_" + index + "_" + canonical.uid);
+      repaired.originalStarterUid = canonical.uid;
+      const canonicalImageIndex = Number(canonical.img);
+      repaired._starterFaceImage = (typeof faceImages !== "undefined" && faceImages[canonicalImageIndex]) ? faceImages[canonicalImageIndex] : (saved._starterFaceImage || "");
+      repaired._starterFullImage = (typeof fullImages !== "undefined" && fullImages[canonicalImageIndex]) ? fullImages[canonicalImageIndex] : (saved._starterFullImage || repaired._starterFaceImage || "");
+    }else{
+      repaired = Object.assign({}, saved);
+    }
+
+    repaired.starterCard = true;
+    delete repaired.region;
+    delete repaired.country;
+
+    const face = repaired._starterFaceImage || "";
+    const full = repaired._starterFullImage || face;
+    if(face && typeof faceImages !== "undefined" && Array.isArray(faceImages)){
+      repaired.img = faceImages.length;
+      faceImages.push(face);
+      if(typeof fullImages !== "undefined" && Array.isArray(fullImages)) fullImages.push(full);
+    }
+    return repaired;
   }
 
   function shuffleCopy(arr){
@@ -1379,6 +1426,8 @@ drivers.forEach(d=>{
     }
 
     if(Array.isArray(chosen) && chosen.length){
+      chosen = chosen.map((card,index)=>repairAndInstallStarter(card,index,fullStarterPool));
+      localStorage.setItem(STARTER_KEY, JSON.stringify(chosen));
       drivers.splice(0, drivers.length, ...chosen);
 
       // Make sure future new cards continue after the built-in numbering.
