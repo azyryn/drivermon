@@ -497,6 +497,76 @@ const tradeDb = firebase.database();
 })();
 </script>
 
+<!-- v225: stable per-card artwork binding -->
+<script>
+(function(){
+  const COLLECTION_BACKUP_KEY="drivermon_collection_v1_backup";
+  function repairArtworkFromPreviousSnapshot(){
+    try{
+      if(typeof drivers==="undefined" || !Array.isArray(drivers) || !Array.isArray(faceImages)) return false;
+      const previous=JSON.parse(localStorage.getItem(COLLECTION_BACKUP_KEY)||"null");
+      if(!previous || !Array.isArray(previous.drivers) || !Array.isArray(previous.faceImages)) return false;
+
+      // A deleted test card can leave the surviving cards intact but shift the
+      // shared image slots. Match by permanent card UID, never by card position.
+      const previousByUid=new Map(previous.drivers.filter(Boolean).map(card=>[String(card.uid),card]));
+      const currentIds=new Set(drivers.filter(Boolean).map(card=>String(card.uid)));
+      const missingPreviousCards=previous.drivers.filter(card=>card&&!currentIds.has(String(card.uid)));
+      if(!missingPreviousCards.length) return false;
+
+      const repairs=[];
+      drivers.forEach(card=>{
+        if(!card) return;
+        const before=previousByUid.get(String(card.uid));
+        if(!before) return;
+        const oldFaceIndex=Number(before.imageFaceIndex!=null?before.imageFaceIndex:before.img);
+        const oldFullIndex=Number(before.imageFullIndex!=null?before.imageFullIndex:before.img);
+        const correctFace=previous.faceImages[oldFaceIndex]||"";
+        const correctFull=Array.isArray(previous.fullImages)?(previous.fullImages[oldFullIndex]||correctFace):correctFace;
+        const currentFaceIndex=Number(card.imageFaceIndex!=null?card.imageFaceIndex:card.img);
+        if(correctFace && faceImages[currentFaceIndex]!==correctFace) repairs.push({card,correctFace,correctFull});
+      });
+
+      // Require multiple mismatches before touching anything: this identifies
+      // the old "deleted card shifted every photo" bug, not a normal card edit.
+      if(repairs.length<2) return false;
+      repairs.forEach(({card,correctFace,correctFull})=>{
+        const artworkIndex=faceImages.length;
+        faceImages.push(correctFace);
+        if(typeof fullImages!=="undefined" && Array.isArray(fullImages)) fullImages.push(correctFull||correctFace);
+        card.img=artworkIndex;
+        card.imageFaceIndex=artworkIndex;
+        card.imageFullIndex=artworkIndex;
+        if(!card.imageKey) card.imageKey="artwork_"+String(card.uid||"card")+"_repaired";
+      });
+      if(typeof saveCollection==="function") saveCollection();
+      if(typeof renderCards==="function") renderCards();
+      console.info("Recovered "+repairs.length+" card artwork links from the previous collection snapshot.");
+      return true;
+    }catch(error){ console.warn("Previous artwork snapshot could not be used",error); return false; }
+  }
+  function bindExistingArtwork(){
+    try{
+      if(typeof drivers==="undefined" || !Array.isArray(drivers)) return;
+      let changed=false;
+      drivers.forEach(function(card){
+        if(!card) return;
+        const index=Number.isInteger(Number(card.img)) ? Number(card.img) : -1;
+        if(!card.imageKey){ card.imageKey="artwork_"+String(card.uid||"card")+"_"+Math.max(0,index); changed=true; }
+        if(card.imageFaceIndex==null){ card.imageFaceIndex=index; changed=true; }
+        if(card.imageFullIndex==null){ card.imageFullIndex=index; changed=true; }
+      });
+      if(changed && typeof saveCollection==="function") saveCollection();
+    }catch(e){ console.warn("Artwork binding upgrade failed",e); }
+  }
+  window.addEventListener("load",function(){
+    setTimeout(function(){ repairArtworkFromPreviousSnapshot(); bindExistingArtwork(); },1400);
+  });
+  window.dmBindCardArtwork=bindExistingArtwork;
+  window.dmRepairArtworkFromPreviousSnapshot=repairArtworkFromPreviousSnapshot;
+})();
+</script>
+
 <!-- v223: permanently bind every starter's identity, stats and images together -->
 <script>
 (function(){
@@ -622,7 +692,12 @@ const tradeDb = firebase.database();
     const face=card._tradeFaceImage||card.tradeFaceImage||"";
     const full=card._tradeFullImage||card.tradeFullImage||face;
     if(face&&typeof faceImages!=="undefined"&&Array.isArray(faceImages)){
-      card.img=faceImages.length; faceImages.push(face);
+      const artworkIndex=faceImages.length;
+      card.img=artworkIndex;
+      card.imageFaceIndex=artworkIndex;
+      card.imageFullIndex=artworkIndex;
+      card.imageKey="artwork_"+String(card.uid||"trade")+"_"+Date.now().toString(36);
+      faceImages.push(face);
       if(typeof fullImages!=="undefined"&&Array.isArray(fullImages)) fullImages.push(full||face);
     }
     return card;
@@ -1035,9 +1110,8 @@ function statReliability(d,c){return Math.min(99,Math.round(60+veteranPoints(yea
 function statEfficiency(d,c){return Math.min(99,Math.round((statSpeed(d,c)+statReliability(d,c))/2));}
 
 function imageKey(d){
-  // For built-in cards and newly uploaded cards, img is the safest available photo identity.
-  // This catches when the same screenshot/photo is uploaded again, even if lore changes.
-  return "img_" + d.img;
+  // This belongs to the card itself, not the card's collection position.
+  return String(d&&d.imageKey || "img_" + (d&&d.imageFaceIndex!=null ? d.imageFaceIndex : d&&d.img));
 }
 
 function driverGroupKey(d){
@@ -1158,12 +1232,22 @@ function addDriverMon(){
     return;
   }
 
-  fullImages.push(pendingFullImage);
-  faceImages.push(pendingFaceImage || pendingFullImage);
+  // Create one permanent artwork record for this card before adding it.
+  // `img` remains for older parts of the game, while `imageKey` is the card's
+  // own stable identity and is never based on its position in the collection.
+  const cardUid="card_"+nextUid++;
+  const artworkIndex=faceImages.length;
+  const cardFaceImage=pendingFaceImage || pendingFullImage;
+  const cardFullImage=pendingFullImage;
+  fullImages.push(cardFullImage);
+  faceImages.push(cardFaceImage);
 
   const shinyPull = rollShinyDriverMon();
   drivers.push({
-    uid:"card_"+nextUid++,
+    uid:cardUid,
+    imageKey:"artwork_"+cardUid+"_"+Date.now().toString(36),
+    imageFaceIndex:artworkIndex,
+    imageFullIndex:artworkIndex,
     name:document.getElementById("newName").value||"New DriverMon",
     deliveries:Number(document.getElementById("newDeliveries").value)||0,
     satisfaction:document.getElementById("newSatisfaction").value===""?null:Number(document.getElementById("newSatisfaction").value),
@@ -1179,7 +1263,7 @@ function addDriverMon(){
     randomFact:document.getElementById("newRandomFact").value||"",
     loreQuality:Number(document.getElementById("newLoreQuality").value)||0,
     nameRank:selectedNameRank,
-    img:faceImages.length-1
+    img:artworkIndex
   });
 
   clearCreator();
@@ -1215,6 +1299,9 @@ function updateDriverMon(){
     fullImages.push(pendingFullImage);
     faceImages.push(pendingFaceImage);
     d.img = faceImages.length-1;
+    d.imageFaceIndex = d.img;
+    d.imageFullIndex = d.img;
+    d.imageKey = "artwork_"+String(d.uid||"card")+"_"+Date.now().toString(36);
   }
 
   clearCreator();
@@ -1248,8 +1335,12 @@ function editCard(uid){
   pendingFullImage = null;
   pendingFaceImage = null;
 
-  const img = fullImages[d.img] || faceImages[d.img];
-  document.getElementById("preview").innerHTML = img ? `<img src="${img}" alt="current card image">` : "<span>No image preview</span>";
+  // Editing is for checking the source information, so always prefer the
+  // original full screenshot. The cropped face remains card-only artwork.
+  const fullImageIndex = Number(d.imageFullIndex != null ? d.imageFullIndex : d.img);
+  const faceImageIndex = Number(d.imageFaceIndex != null ? d.imageFaceIndex : d.img);
+  const img = (Array.isArray(fullImages) && fullImages[fullImageIndex]) || (Array.isArray(faceImages) && faceImages[faceImageIndex]);
+  document.getElementById("preview").innerHTML = img ? `<img src="${img}" alt="original uploaded screenshot">` : "<span>No image preview</span>";
 
   document.getElementById("saveButton").textContent = "Save Changes ✅";
   document.getElementById("editStatus").textContent = "Editing: " + (d.name || "DriverMon");
@@ -1270,11 +1361,12 @@ function deleteCard(uid){
   const index=drivers.findIndex(d=>d.uid===uid);
   if(index===-1){alert("Could not find this card.");return;}
   if(!confirm("Delete this DriverMon card?"))return;
+
+  // Cards point to their artwork with d.img.  That image number is independent
+  // from the card's position in the drivers array, so removing image array
+  // entries here would renumber every later image and attach it to the wrong
+  // card.  Keep the shared image arrays stable; unused images are harmless.
   drivers.splice(index,1);
-  try{
-    if(Array.isArray(faceImages)) faceImages.splice(index,1);
-    if(Array.isArray(fullImages)) fullImages.splice(index,1);
-  }catch(e){}
   saveCollection();
   try{
     if(window.dmSaveOwnedCollectionToFirebase){
@@ -1506,7 +1598,11 @@ drivers.forEach(d=>{
     const face = repaired._starterFaceImage || "";
     const full = repaired._starterFullImage || face;
     if(face && typeof faceImages !== "undefined" && Array.isArray(faceImages)){
-      repaired.img = faceImages.length;
+      const artworkIndex = faceImages.length;
+      repaired.img = artworkIndex;
+      repaired.imageFaceIndex = artworkIndex;
+      repaired.imageFullIndex = artworkIndex;
+      repaired.imageKey = "artwork_"+String(repaired.uid||("starter_"+index))+"_"+Date.now().toString(36);
       faceImages.push(face);
       if(typeof fullImages !== "undefined" && Array.isArray(fullImages)) fullImages.push(full);
     }
@@ -6351,16 +6447,17 @@ window.addEventListener("DOMContentLoaded", function(){
   };
 
   function cardImagePayloadV162(card){
-    const imgIndex = Number(card && card.img);
+    const faceIndex = Number(card && (card.imageFaceIndex != null ? card.imageFaceIndex : card.img));
+    const fullIndex = Number(card && (card.imageFullIndex != null ? card.imageFullIndex : card.img));
     let face = "";
     let full = "";
 
     try{
       if(typeof faceImages !== "undefined" && Array.isArray(faceImages)){
-        face = faceImages[imgIndex] || "";
+        face = faceImages[faceIndex] || "";
       }
       if(typeof fullImages !== "undefined" && Array.isArray(fullImages)){
-        full = fullImages[imgIndex] || "";
+        full = fullImages[fullIndex] || "";
       }
     }catch(err){}
 
@@ -6402,6 +6499,9 @@ window.addEventListener("DOMContentLoaded", function(){
       }
 
       card.img = newIndex;
+      card.imageFaceIndex = newIndex;
+      card.imageFullIndex = newIndex;
+      card.imageKey = "artwork_"+String(card.uid||"trade")+"_"+Date.now().toString(36);
     }
 
     return card;
@@ -10825,8 +10925,18 @@ img[alt="DriverDex"]{
         nextUid:(typeof nextUid!=="undefined")?nextUid:(window.nextUid||null),
         savedAt:new Date().toISOString()
       };
-      localStorage.setItem(COLLECTION_KEY, JSON.stringify(payload));
-      localStorage.setItem(COLLECTION_BACKUP_KEY, JSON.stringify(payload));
+      const nextRaw=JSON.stringify(payload);
+      const currentRaw=localStorage.getItem(COLLECTION_KEY);
+
+      // Keep the previous genuinely different collection as the recovery copy.
+      // The old code wrote the new state to both keys, which meant the "backup"
+      // was already overwritten by the time somebody needed it.
+      if(currentRaw && currentRaw!==nextRaw){
+        localStorage.setItem(COLLECTION_BACKUP_KEY, currentRaw);
+      }else if(!localStorage.getItem(COLLECTION_BACKUP_KEY)){
+        localStorage.setItem(COLLECTION_BACKUP_KEY, nextRaw);
+      }
+      localStorage.setItem(COLLECTION_KEY, nextRaw);
       return payload;
     }catch(e){ console.warn("v204 collection save failed", e); }
   }
@@ -10834,9 +10944,11 @@ img[alt="DriverDex"]{
     try{
       const cur=JSON.parse(localStorage.getItem(COLLECTION_KEY)||"null");
       const bak=JSON.parse(localStorage.getItem(COLLECTION_BACKUP_KEY)||"null");
-      const curCount=cur&&Array.isArray(cur.drivers)?cur.drivers.length:0;
-      const bakCount=bak&&Array.isArray(bak.drivers)?bak.drivers.length:0;
-      if(bakCount>curCount){
+      const currentIsValid=!!(cur&&Array.isArray(cur.drivers)&&Array.isArray(cur.faceImages)&&Array.isArray(cur.fullImages));
+      const backupIsValid=!!(bak&&Array.isArray(bak.drivers)&&Array.isArray(bak.faceImages)&&Array.isArray(bak.fullImages));
+      // Restore only if the main save is missing or damaged.  A backup having
+      // more cards can simply mean the player intentionally deleted a card.
+      if(!currentIsValid && backupIsValid){
         localStorage.setItem(COLLECTION_KEY, JSON.stringify(bak));
         const arr=driversNow();
         if(Array.isArray(arr)) arr.splice(0, arr.length, ...bak.drivers);
