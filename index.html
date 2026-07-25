@@ -9873,14 +9873,25 @@ img[alt="DriverDex"]{
     });
   }
   function dedupeRows(rows){
-    const groups=new Map();
+    const canonicalName=s=>norm(s).normalize("NFKC").replace(/[^a-z0-9]/g,"");
+    const identityIds=r=>new Set([r&&r.id,r&&r.playerId,r&&r.raw&&r.raw.id,r&&r.raw&&r.raw.playerId]
+      .map(x=>String(x||"").trim().toLowerCase()).filter(Boolean));
+    const samePlayer=(a,b)=>{
+      const an=canonicalName(a.name||a.username), bn=canonicalName(b.name||b.username);
+      if(an && bn && an!=="player" && an!=="guest" && an===bn) return true;
+      const ai=identityIds(a), bi=identityIds(b);
+      for(const id of ai) if(bi.has(id)) return true;
+      return false;
+    };
+    const groups=[];
     (rows||[]).forEach(r=>{
-      const nameKey=norm(r.name||r.username);
-      const key=nameKey && nameKey!=="player" ? "name:"+nameKey : "id:"+safe(r.id);
-      const old=groups.get(key);
-      groups.set(key, old ? mergeRows(old,r) : r);
+      const matches=[];
+      groups.forEach((g,i)=>{ if(g.some(x=>samePlayer(x,r))) matches.push(i); });
+      if(!matches.length){ groups.push([r]); return; }
+      const target=matches[0]; groups[target].push(r);
+      for(let i=matches.length-1;i>0;i--){ const at=matches[i]; groups[target].push(...groups[at]); groups.splice(at,1); }
     });
-    return Array.from(groups.values());
+    return groups.map(g=>g.reduce(mergeRows)).filter(Boolean);
   }
 
   function cardPower(c){ return num(c.power, num(c.score, num(c.totalPower,0))); }
@@ -10032,7 +10043,7 @@ img[alt="DriverDex"]{
   const COLLECTION_BACKUP_KEY = "drivermon_collection_v1_backup";
   const PLAYER_KEYS = ["drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId","drivermonDevicePlayerId"];
   function safe(s){ return String(s||"player").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90)||"player"; }
-  function norm(s){ return String(s||"").trim().toLowerCase(); }
+  function norm(s){ return String(s||"").normalize("NFKC").trim().toLowerCase().replace(/[^a-z0-9]/g,""); }
   function num(v,f){ v=Number(v); return Number.isFinite(v)?v:(f||0); }
   function getProfile(){
     try{ if(typeof getPlayerProfile==="function"){ const p=getPlayerProfile(); if(p&&typeof p==="object") return p; } }catch(e){}
