@@ -7164,11 +7164,11 @@ window.addEventListener("DOMContentLoaded", function(){
   function localName(){ const p=getProfile(); return String(p.username||p.name||p.playerName||p.displayName||"").trim(); }
   function localIcon(){ const p=getProfile(); for(const x of [p.avatar,p.avatarData,p.icon,p.profilePic,p.profileImage,p.image,p.photo]) if(isGoodImage(x)) return String(x); return ""; }
   function stableId(){
-    const name=localName(); let id="";
-    if(name && norm(name)!=="player" && norm(name)!=="guest") id="dm_"+safe(norm(name));
+    let id="";
+    try{ id=safe(localStorage.getItem("drivermonStablePlayerId_v208")||""); if(id==="player") id=""; }catch(e){}
     if(!id){ for(const k of PLAYER_ID_KEYS){ try{ const v=localStorage.getItem(k); if(v){ id=safe(v); break; } }catch(e){} } }
     if(!id) id="dm_device_"+Math.random().toString(36).slice(2,10)+"_"+Date.now().toString(36);
-    try{ PLAYER_ID_KEYS.forEach(k=>localStorage.setItem(k,id)); }catch(e){}
+    try{ localStorage.setItem("drivermonStablePlayerId_v208",id); PLAYER_ID_KEYS.forEach(k=>localStorage.setItem(k,id)); }catch(e){}
     return id;
   }
   const MY_ID=stableId();
@@ -7377,11 +7377,11 @@ window.addEventListener("DOMContentLoaded", function(){
   }
   function playerName(){ const p=readProfile(); return String(p.username||p.name||p.playerName||p.displayName||"").trim(); }
   function playerId(){
-    const name=playerName();
-    if(name) return "dm_" + safeKey(name.toLowerCase());
-    for(const k of PLAYER_KEYS){ try{ const v=localStorage.getItem(k); if(v) return safeKey(v); }catch(e){} }
-    const id="dm_device_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,8);
-    try{ localStorage.setItem("drivermonDevicePlayerId", id); }catch(e){}
+    let id="";
+    try{ id=safeKey(localStorage.getItem("drivermonStablePlayerId_v208")||""); if(id==="player") id=""; }catch(e){}
+    if(!id){ for(const k of PLAYER_KEYS){ try{ const v=localStorage.getItem(k); if(v){ id=safeKey(v); break; } }catch(e){} } }
+    if(!id) id="dm_device_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,8);
+    try{ localStorage.setItem("drivermonStablePlayerId_v208",id); PLAYER_KEYS.forEach(k=>localStorage.setItem(k,id)); }catch(e){}
     return id;
   }
   function arrDrivers(){ try{ if(typeof drivers !== "undefined" && Array.isArray(drivers)) return drivers; }catch(e){} return []; }
@@ -9367,15 +9367,14 @@ img[alt="DriverDex"]{
     return String(r||"").trim();
   }
   function getId(){
-    // Stable name-based ID so a refresh does not create a new Firebase player row.
     let id="";
     try{
-      const n = norm(getName());
-      if(n && n!=="player" && n!=="guest") id = "dm_" + safe(n);
+      id=safe(localStorage.getItem("drivermonStablePlayerId_v208")||"");
+      if(id==="player") id="";
       if(!id) id=localStorage.getItem(PLAYER_ID_KEY) || localStorage.getItem("drivermonPlayerId_v177") || localStorage.getItem("drivermonPlayerId") || localStorage.getItem("playerId") || "";
     }catch(e){}
     if(!id) id="dm_device_"+Math.random().toString(36).slice(2,10)+"_"+Date.now().toString(36);
-    id=safe(id); try{ localStorage.setItem(PLAYER_ID_KEY,id); localStorage.setItem("drivermonPlayerId",id); localStorage.setItem("drivermonPlayerId_v177",id); localStorage.setItem("drivermonDevicePlayerId",id); }catch(e){}
+    id=safe(id); try{ localStorage.setItem("drivermonStablePlayerId_v208",id); localStorage.setItem(PLAYER_ID_KEY,id); localStorage.setItem("drivermonPlayerId",id); localStorage.setItem("drivermonPlayerId_v177",id); localStorage.setItem("drivermonDevicePlayerId",id); }catch(e){}
     return id;
   }
   function getRating(){ try{ return number(localStorage.getItem(RATING_KEY), 1000) || 1000; }catch(e){ return 1000; } }
@@ -9882,9 +9881,9 @@ img[alt="DriverDex"]{
       for(const id of ai) if(bi.has(id)) return true;
       const av=String(a.icon||a.avatar||""), bv=String(b.icon||b.avatar||"");
       if(av.length>100 && av===bv) return true;
-      const cardSig=r=>(r.publicCollection||[]).map(c=>String(c&&c.uid||c&&c.id||"")).filter(Boolean).sort().join("|");
+      const cardSig=r=>(r.publicCollection||[]).map(c=>[c&&c.uid||c&&c.id||"",c&&c.name||"",c&&c.region||"",c&&c.power||c&&c.score||0].join("~")).filter(Boolean).sort().join("|");
       const ac=cardSig(a), bc=cardSig(b);
-      if(ac && bc && ac.split("|").length>=2 && ac===bc) return true;
+      if(ac && bc && ac===bc) return true;
       return false;
     };
     const groups=[];
@@ -10175,7 +10174,7 @@ img[alt="DriverDex"]{
     if(typeof tradeDb==="undefined"||!tradeDb) return Promise.resolve();
     return tradeDb.ref(LB_PATH).once("value").then(snap=>{
       const val=snap.val()||{}, groups=[];
-      const cardSig=r=>(r&&r.publicCollection||[]).map(c=>String(c&&c.uid||c&&c.id||"")).filter(Boolean).sort().join("|");
+      const cardSig=r=>(r&&r.publicCollection||[]).map(c=>[c&&c.uid||c&&c.id||"",c&&c.name||"",c&&c.region||"",c&&c.power||c&&c.score||0].join("~")).filter(Boolean).sort().join("|");
       const sameOwner=(a,b)=>{
         const an=norm(a.row.name||a.row.username), bn=norm(b.row.name||b.row.username);
         if(an&&bn&&an!=="player"&&an!=="guest"&&an===bn) return true;
@@ -10184,7 +10183,7 @@ img[alt="DriverDex"]{
         const av=String(a.row.icon||a.row.avatar||""), bv=String(b.row.icon||b.row.avatar||"");
         if(av.length>100&&av===bv) return true;
         const ac=cardSig(a.row), bc=cardSig(b.row);
-        return !!(ac&&bc&&ac.split("|").length>=2&&ac===bc);
+        return !!(ac&&bc&&ac===bc);
       };
       Object.keys(val).forEach(k=>{
         const item={key:k,row:val[k]||{}}, hits=[];
