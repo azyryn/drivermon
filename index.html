@@ -690,72 +690,37 @@ const tradeDb = firebase.database();
     creatingTrades.set(String(uid),creation);
   };
 
-  window.v219ClaimTradeCode=window.claimTradeCode=function(isRetry){
+  window.v219ClaimTradeCode=window.claimTradeCode=async function(){
     const input=document.getElementById("tradeCodeInput"), status=document.getElementById("tradeStatus");
     let code=normalise(input&&input.value);
     if(!code){ if(status) status.textContent="Enter a trade code first."; return; }
     if(typeof tradeDb==="undefined"||!tradeDb){ if(status) status.textContent="Trading is not connected to Firebase."; return; }
     const recipient=playerId(); if(!recipient){ if(status) status.textContent="Create your player profile before claiming a card."; return; }
     const recipientDevice=tradeDeviceId();
-    if(status) status.textContent=isRetry?"Waiting for the card to finish uploading...":"Claiming card...";
+    if(status) status.textContent="Reading "+code+" from Firebase...";
     const ref=tradeDb.ref("trades/"+code);
-    const runClaimTransaction=()=>ref.transaction(trade=>{
-      const sameCreatingDevice=safe(trade&&trade.senderId)===safe(recipient) && (!trade.senderDeviceId||safe(trade.senderDeviceId)===safe(recipientDevice));
-      if(!trade||!trade.card||!trade.senderId||!trade.sourceUid||trade.claimed||sameCreatingDevice) return;
-      trade.claimed=true; trade.claimedAt=new Date().toISOString(); trade.claimedBy=recipient; return trade;
-    },async(error,committed,snapshot)=>{
-      if(error){ claimWaits.delete(code); if(status) status.textContent="Could not claim trade. Check your connection."; return; }
+    try{
+      const snapshot=await ref.once("value");
       const trade=snapshot&&snapshot.val();
-      if(!committed){
-        if(!trade){
-          const state=claimWaits.get(code)||{started:Date.now(),timer:null};
-          if(Date.now()-state.started<60000){
-            if(status) status.textContent="Code not visible in Firebase yet — waiting and trying again...";
-            clearTimeout(state.timer);
-            state.timer=setTimeout(()=>window.v219ClaimTradeCode(true),2000);
-            claimWaits.set(code,state);
-            return;
-          }
-          claimWaits.delete(code);
-          if(status) status.textContent="That trade code was not uploaded to Firebase. Press Trade again on the sending device, wait for ‘ready’, then retry.";
-          return;
-        }
-        claimWaits.delete(code);
-        const sameCreatingDevice=trade&&safe(trade.senderId)===safe(recipient)&&(!trade.senderDeviceId||safe(trade.senderDeviceId)===safe(recipientDevice));
-        if(status) status.textContent=sameCreatingDevice?"Open this code on the other device to claim it.":(trade&&trade.claimed?"That trade code has already been claimed.":"That trade code could not be found.");
-        return;
-      }
-      claimWaits.delete(code);
+      if(!trade){ if(status) status.textContent="No Firebase record matched: "+code; return; }
+      if(!trade.card||!trade.senderId||!trade.sourceUid){ if(status) status.textContent="The Firebase trade record is incomplete."; return; }
+      const sameCreatingDevice=safe(trade.senderId)===safe(recipient)&&(!trade.senderDeviceId||safe(trade.senderDeviceId)===safe(recipientDevice));
+      if(sameCreatingDevice){ if(status) status.textContent="Open this code on the other device to claim it."; return; }
+      if(trade.claimed){ if(status) status.textContent="That trade code has already been claimed."; return; }
+      if(status) status.textContent="Trade found — transferring card...";
+      await ref.update({claimed:true,claimedAt:new Date().toISOString(),claimedBy:recipient,claimedDeviceId:recipientDevice});
       const card=receivedCard(trade.card); localCards().push(card);
       try{ if(typeof saveCollection==="function") saveCollection(); }catch(e){}
       try{ if(typeof window.dmSaveOwnedCollectionToFirebase==="function") await window.dmSaveOwnedCollectionToFirebase("trade-claim"); }catch(e){}
       try{ await removeFromSender(trade.senderId,trade.sourceUid,code); }
       catch(e){ console.warn("Sender removal will retry from transfer marker",e); }
       try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
-      if(input) input.value=""; if(status) status.textContent="Card transferred to your collection. It has been removed from the original owner.";
-    },false);
-    ref.once("value").then(preview=>{
-      const visibleTrade=preview&&preview.val();
-      if(visibleTrade){
-        claimWaits.delete(code);
-        runClaimTransaction();
-        return;
-      }
-      const state=claimWaits.get(code)||{started:Date.now(),timer:null};
-      if(Date.now()-state.started<60000){
-        if(status) status.textContent="Waiting for Firebase to return the trade code...";
-        clearTimeout(state.timer);
-        state.timer=setTimeout(()=>window.v219ClaimTradeCode(true),2000);
-        claimWaits.set(code,state);
-        return;
-      }
-      claimWaits.delete(code);
-      if(status) status.textContent="Firebase did not return that code to this device. Check that both devices have the newest game version.";
-    }).catch(error=>{
-      claimWaits.delete(code);
-      console.warn("Trade code read failed",error);
-      if(status) status.textContent="Firebase blocked the code lookup: "+(error&&error.message?error.message:"check database access");
-    });
+      if(input) input.value="";
+      if(status) status.textContent="Card transferred to your collection. It has been removed from the original owner.";
+    }catch(error){
+      console.warn("Trade claim failed",error);
+      if(status) status.textContent="Firebase claim failed: "+(error&&error.message?error.message:"check database access");
+    }
   };
 
   window.addEventListener("load",watchMyTransfers);
