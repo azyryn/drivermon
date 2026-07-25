@@ -685,6 +685,15 @@ const tradeDb = firebase.database();
        alt="DriverDex"
        style="width:100%;max-width:420px;cursor:pointer;display:block;margin:0 auto;padding:0;">
 </div>
+<div class="dmBackupIntro">
+  <strong>Changing devices?</strong>
+  <span>Export your DriverMon backup, move the file to your new device, then upload it using Import Backup.</span>
+</div>
+<div class="dmBackupButtons">
+  <button type="button" onclick="exportDriverMonBackup()">⬇ Export Backup</button>
+  <button type="button" onclick="document.getElementById('dmBackupImportFile').click()">⬆ Import Backup</button>
+  <input id="dmBackupImportFile" type="file" accept=".drivermon,.json,application/json" hidden onchange="importDriverMonBackup(this)">
+</div>
 
   <div id="tradeStatus" class="tradeStatus"></div>
 </div>
@@ -10466,4 +10475,70 @@ img[alt="DriverDex"]{
 <script>
 if(typeof window.v219CreateTradeCode==="function") window.createTradeCode=window.v219CreateTradeCode;
 if(typeof window.v219ClaimTradeCode==="function") window.claimTradeCode=window.v219ClaimTradeCode;
+</script>
+
+<!-- v220: portable collection backup and restore -->
+<style>
+.dmBackupButtons{display:flex;justify-content:center;gap:7px;margin:7px auto 12px;max-width:420px}
+.dmBackupIntro{max-width:420px;margin:10px auto 0;text-align:center;padding:8px 10px;border-radius:11px;background:rgba(255,255,255,.72);color:#301071;line-height:1.25}
+.dmBackupIntro strong{display:block;font-size:13px;font-weight:1000;margin-bottom:3px}
+.dmBackupIntro span{display:block;font-size:10px;font-weight:800}
+.dmBackupButtons button{flex:1;padding:7px 8px!important;border-radius:10px!important;border:2px solid #fff!important;background:linear-gradient(180deg,#7756ff,#3d24a8)!important;color:#fff!important;font-size:10px!important;font-weight:1000!important;box-shadow:0 3px 0 rgba(0,0,0,.3)!important}
+.dmBackupButtons button:active{transform:translateY(2px);box-shadow:0 1px 0 rgba(0,0,0,.3)!important}
+</style>
+<script>
+(function(){
+  const FORMAT="DriverMonBackup";
+  const VERSION=220;
+  function runtimeCollection(){
+    let ds=[],faces=[],fulls=[],uid=null;
+    try{ if(typeof drivers!=="undefined"&&Array.isArray(drivers)) ds=drivers; }catch(e){}
+    try{ if(typeof faceImages!=="undefined"&&Array.isArray(faceImages)) faces=faceImages; }catch(e){}
+    try{ if(typeof fullImages!=="undefined"&&Array.isArray(fullImages)) fulls=fullImages; }catch(e){}
+    try{ if(typeof nextUid!=="undefined") uid=nextUid; }catch(e){}
+    return {drivers:JSON.parse(JSON.stringify(ds)),faceImages:faces.slice(),fullImages:fulls.slice(),nextUid:uid,savedAt:new Date().toISOString()};
+  }
+  function includedKey(key){ return /drivermon|driverMon|playerProfile|homeRegion|playerId/i.test(String(key||"")); }
+  function makeBackup(){
+    const storage={};
+    for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(includedKey(k)) storage[k]=localStorage.getItem(k); }
+    return {format:FORMAT,version:VERSION,exportedAt:new Date().toISOString(),collection:runtimeCollection(),localStorage:storage};
+  }
+  function filename(prefix){
+    const d=new Date(), stamp=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+    return (prefix||"DriverMon-Backup")+"-"+stamp+".drivermon";
+  }
+  function download(data,name){
+    const blob=new Blob([JSON.stringify(data)],{type:"application/json"});
+    const url=URL.createObjectURL(blob),a=document.createElement("a");
+    a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
+  }
+  window.exportDriverMonBackup=function(){
+    try{ download(makeBackup(),filename("DriverMon-Backup")); alert("DriverMon backup downloaded. Keep this file somewhere safe or send it to your other device."); }
+    catch(e){ console.warn("Backup export failed",e); alert("The backup could not be created on this browser."); }
+  };
+  window.importDriverMonBackup=function(input){
+    const file=input&&input.files&&input.files[0]; if(!file) return;
+    const reader=new FileReader();
+    reader.onload=function(){
+      try{
+        const backup=JSON.parse(String(reader.result||""));
+        if(!backup||backup.format!==FORMAT||!backup.collection||!Array.isArray(backup.collection.drivers)) throw new Error("Invalid backup");
+        const count=backup.collection.drivers.length;
+        if(!confirm("Restore "+count+" DriverMon cards from this backup?\n\nThis will replace the collection currently on this device.")) return;
+        download(makeBackup(),filename("DriverMon-Before-Restore"));
+        const remove=[]; for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(includedKey(k)) remove.push(k); }
+        remove.forEach(k=>localStorage.removeItem(k));
+        Object.keys(backup.localStorage||{}).forEach(k=>{ if(includedKey(k)&&backup.localStorage[k]!=null) localStorage.setItem(k,String(backup.localStorage[k])); });
+        localStorage.setItem("drivermon_collection_v1",JSON.stringify(backup.collection));
+        localStorage.setItem("drivermon_collection_v1_backup",JSON.stringify(backup.collection));
+        alert("Backup restored successfully. DriverMon will now reload.");
+        location.reload();
+      }catch(e){ console.warn("Backup import failed",e); alert("This does not appear to be a valid DriverMon backup file."); }
+      finally{ if(input) input.value=""; }
+    };
+    reader.onerror=function(){ alert("The selected backup file could not be read."); if(input) input.value=""; };
+    reader.readAsText(file);
+  };
+})();
 </script>
