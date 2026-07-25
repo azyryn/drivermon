@@ -497,6 +497,111 @@ const tradeDb = firebase.database();
 })();
 </script>
 
+<!-- v219: one-way Firebase card ownership transfers -->
+<script>
+(function(){
+  const COLLECTION_ROOT="trades/__playerCollections";
+  const TRANSFER_ROOT="trades/__transferredCards";
+  function safe(v){ return String(v||"player").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90)||"player"; }
+  function playerId(){
+    const keys=["drivermonStablePlayerId_v208","drivermonDevicePlayerId","drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId"];
+    for(const k of keys){ try{ const v=localStorage.getItem(k); if(v) return safe(v); }catch(e){} }
+    return "";
+  }
+  function localCards(){ try{ if(typeof drivers!=="undefined"&&Array.isArray(drivers)) return drivers; }catch(e){} return []; }
+  function normalise(value){
+    if(typeof window.normaliseTradeCode==="function") return window.normaliseTradeCode(value);
+    return String(value||"").trim().toUpperCase().replace(/[^A-Z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+  }
+  function installImage(card){
+    const face=card._tradeFaceImage||card.tradeFaceImage||"";
+    const full=card._tradeFullImage||card.tradeFullImage||face;
+    if(face&&typeof faceImages!=="undefined"&&Array.isArray(faceImages)){
+      card.img=faceImages.length; faceImages.push(face);
+      if(typeof fullImages!=="undefined"&&Array.isArray(fullImages)) fullImages.push(full||face);
+    }
+    return card;
+  }
+  function receivedCard(source){
+    const card=JSON.parse(JSON.stringify(source||{}));
+    delete card._collectionIndex;
+    card.uid="trade_"+Date.now()+"_"+Math.random().toString(36).slice(2,8);
+    card.traded=true; card.tradeReceivedAt=new Date().toISOString();
+    return installImage(card);
+  }
+  async function removeFromSender(senderId,sourceUid,tradeCode){
+    const marker={tradeCode,sourceUid:String(sourceUid),transferredAt:new Date().toISOString()};
+    await tradeDb.ref(TRANSFER_ROOT+"/"+safe(senderId)+"/"+safe(sourceUid)).set(marker);
+    await tradeDb.ref(COLLECTION_ROOT+"/"+safe(senderId)).transaction(payload=>{
+      if(!payload||!Array.isArray(payload.drivers)) return payload;
+      payload.drivers=payload.drivers.filter(d=>String(d&&d.uid)!==String(sourceUid));
+      payload.updatedAt=Date.now(); payload.updatedIso=new Date().toISOString();
+      return payload;
+    });
+  }
+  function removeTransferredLocal(snapshotValue){
+    const marks=snapshotValue||{}, ids=new Set(Object.keys(marks).map(k=>String(marks[k]&&marks[k].sourceUid||k)));
+    if(!ids.size) return false;
+    const list=localCards(); const before=list.length;
+    for(let i=list.length-1;i>=0;i--) if(ids.has(String(list[i]&&list[i].uid))) list.splice(i,1);
+    if(list.length===before) return false;
+    try{ if(typeof saveCollection==="function") saveCollection(); }catch(e){}
+    try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
+    return true;
+  }
+  function watchMyTransfers(){
+    if(typeof tradeDb==="undefined"||!tradeDb||!playerId()) return;
+    const ref=tradeDb.ref(TRANSFER_ROOT+"/"+playerId());
+    ref.on("value",snap=>removeTransferredLocal(snap.val()),e=>console.warn("Transfer sync failed",e));
+    setTimeout(()=>ref.once("value").then(s=>removeTransferredLocal(s.val())).catch(()=>{}),1200);
+  }
+
+  window.v219CreateTradeCode=window.createTradeCode=function(uid){
+    if(typeof tradeDb==="undefined"||!tradeDb){ alert("Trading is not connected to Firebase yet."); return; }
+    const card=localCards().find(d=>String(d.uid)===String(uid));
+    if(!card){ alert("Could not find this card."); return; }
+    const sender=playerId();
+    if(!sender){ alert("Create your player profile before trading."); return; }
+    window.makeUniqueTradeCode().then(code=>{
+      const tradeCard=typeof window.cloneCardForTrade==="function"?window.cloneCardForTrade(card):JSON.parse(JSON.stringify(card));
+      return tradeDb.ref("trades/"+code).set({code,card:tradeCard,senderId:sender,sourceUid:String(card.uid),createdAt:new Date().toISOString(),claimed:false}).then(()=>{
+        if(navigator.clipboard) navigator.clipboard.writeText(code).catch(()=>{});
+        alert("Trade code created:\n\n"+code+"\n\nThe card will leave your collection when another player claims it.");
+      });
+    }).catch(err=>{ console.warn("Trade code failed",err); alert("Trade code failed. Check your internet connection."); });
+  };
+
+  window.v219ClaimTradeCode=window.claimTradeCode=function(){
+    const input=document.getElementById("tradeCodeInput"), status=document.getElementById("tradeStatus");
+    const code=normalise(input&&input.value); if(!code){ if(status) status.textContent="Enter a trade code first."; return; }
+    if(typeof tradeDb==="undefined"||!tradeDb){ if(status) status.textContent="Trading is not connected to Firebase."; return; }
+    const recipient=playerId(); if(!recipient){ if(status) status.textContent="Create your player profile before claiming a card."; return; }
+    if(status) status.textContent="Claiming card...";
+    const ref=tradeDb.ref("trades/"+code);
+    ref.transaction(trade=>{
+      if(!trade||!trade.card||!trade.senderId||!trade.sourceUid||trade.claimed||safe(trade.senderId)===safe(recipient)) return;
+      trade.claimed=true; trade.claimedAt=new Date().toISOString(); trade.claimedBy=recipient; return trade;
+    },async(error,committed,snapshot)=>{
+      if(error){ if(status) status.textContent="Could not claim trade. Check your connection."; return; }
+      const trade=snapshot&&snapshot.val();
+      if(!committed){
+        if(status) status.textContent=trade&&safe(trade.senderId)===safe(recipient)?"You cannot claim your own trade code.":"That code is invalid or has already been claimed.";
+        return;
+      }
+      const card=receivedCard(trade.card); localCards().push(card);
+      try{ if(typeof saveCollection==="function") saveCollection(); }catch(e){}
+      try{ if(typeof window.dmSaveOwnedCollectionToFirebase==="function") await window.dmSaveOwnedCollectionToFirebase("trade-claim"); }catch(e){}
+      try{ await removeFromSender(trade.senderId,trade.sourceUid,code); }
+      catch(e){ console.warn("Sender removal will retry from transfer marker",e); }
+      try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
+      if(input) input.value=""; if(status) status.textContent="Card transferred to your collection. It has been removed from the original owner.";
+    },false);
+  };
+
+  window.addEventListener("load",watchMyTransfers);
+})();
+</script>
+
 </head>
 <body>
 <div class="app">
@@ -536,7 +641,6 @@ const tradeDb = firebase.database();
         </select>
       </label>
       <input id="newCountry" type="hidden">
-      <label>Rarity<select id="manualRarity"><option>Auto</option><option>Bronze</option><option>Silver</option><option>Gold</option><option>Diamond</option><option>Platinum</option><option>Final</option></select></label>
       <label>Deliveries<input id="newDeliveries" type="number" placeholder="10224"></label>
       <label>Satisfaction %<input id="newSatisfaction" type="number" placeholder="98"></label>
       <label>Compliments<input id="newCompliments" type="number" placeholder="775"></label>
@@ -898,6 +1002,17 @@ function saveDriverMon(){
   }
 }
 
+function rollShinyDriverMon(){
+  try{
+    if(window.crypto && typeof window.crypto.getRandomValues === "function"){
+      const roll = new Uint32Array(1);
+      window.crypto.getRandomValues(roll);
+      return (roll[0] % 50) === 0;
+    }
+  }catch(e){}
+  return Math.floor(Math.random() * 50) === 0;
+}
+
 function addDriverMon(){
   if(!pendingFullImage){
     alert("Upload a screenshot first.");
@@ -907,6 +1022,7 @@ function addDriverMon(){
   fullImages.push(pendingFullImage);
   faceImages.push(pendingFaceImage || pendingFullImage);
 
+  const shinyPull = rollShinyDriverMon();
   drivers.push({
     uid:"card_"+nextUid++,
     name:document.getElementById("newName").value||"New DriverMon",
@@ -915,7 +1031,8 @@ function addDriverMon(){
     compliments:Number(document.getElementById("newCompliments").value)||0,
     since:document.getElementById("newSince").value||"May 2026",
     ability:document.getElementById("newAbility").value||"",
-    manualRarity:document.getElementById("manualRarity").value,
+    manualRarity:"Auto",
+    shiny:shinyPull,
     whyDeliver:document.getElementById("newWhyDeliver").checked,
     whiteDriver:document.getElementById("newWhite").checked,
     region:document.getElementById("newRegion")?.value || "",
@@ -928,6 +1045,7 @@ function addDriverMon(){
 
   clearCreator();
   renderCards();
+  if(shinyPull) alert("✨ SHINY DRIVERMON! You hit the rare 1 in 50 chance. This card receives the Shiny power bonus.");
   try{ if(typeof window.dmSaveOwnedCollectionToFirebase === "function") window.dmSaveOwnedCollectionToFirebase("create"); }catch(e){ console.warn("Firebase collection save after create failed", e); }
 }
 
@@ -945,7 +1063,6 @@ function updateDriverMon(){
   d.compliments = Number(document.getElementById("newCompliments").value)||0;
   d.since = document.getElementById("newSince").value||"May 2026";
   d.ability = document.getElementById("newAbility").value||"";
-  d.manualRarity = document.getElementById("manualRarity").value;
   d.whyDeliver = document.getElementById("newWhyDeliver").checked;
   d.whiteDriver = document.getElementById("newWhite").checked;
   d.region = document.getElementById("newRegion")?.value || "";
@@ -981,7 +1098,6 @@ function editCard(uid){
   document.getElementById("newCompliments").value = d.compliments || 0;
   document.getElementById("newSince").value = d.since || "";
   document.getElementById("newAbility").value = d.ability || "";
-  document.getElementById("manualRarity").value = d.manualRarity || "Auto";
   document.getElementById("newWhyDeliver").checked = !!d.whyDeliver;
   document.getElementById("newWhite").checked = !!d.whiteDriver;
   if(document.getElementById("newRegion")) document.getElementById("newRegion").value = d.region || "";
@@ -1005,7 +1121,7 @@ function clearCreator(){pendingFullImage=null;pendingFaceImage=null;["newImage",
 document.getElementById("newWhyDeliver").checked=false;
 document.getElementById("newWhite").checked=false;
 if(document.getElementById("newRegion")) document.getElementById("newRegion").value="";
-document.getElementById("newLoreQuality").value="0";document.getElementById("manualRarity").value="Auto";document.getElementById("preview").innerHTML="<span>Full screenshot appears here</span>";
+document.getElementById("newLoreQuality").value="0";document.getElementById("preview").innerHTML="<span>Full screenshot appears here</span>";
 editingUid=null;
 document.getElementById("saveButton").textContent="Create DriverMon ⚡";
 document.getElementById("editStatus").textContent="";
@@ -1330,7 +1446,20 @@ window.addEventListener("DOMContentLoaded", function(){
       Some uploads become ultra rare <b>Shiny DriverMon</b> cards.
       <br><br>
 
-      Build your collection and compare legendary drivers with friends.<br><br><b>Set your home region below to unlock your regional DriverDex.</b>
+      <b>Battle other players:</b>
+      <br>
+      • Open the <b>Leaderboard</b> and choose the <b>⚔ Battle</b> tab
+      <br>
+      • Your team is selected automatically using the daily battle modifier
+      <br>
+      • Battle each opponent once per day; cards used to attack rest until tomorrow
+      <br>
+      • Battling earns Driver XP, levels and bonus power
+      <br>
+      • With enough Career XP, a DriverMon can become eligible to <b>evolve and promote to its next rarity</b>
+      <br><br>
+
+      Build your collection, climb the Battle Rating leaderboard and compare legendary drivers with friends.<br><br><b>Set your home region below to unlock your regional DriverDex.</b>
     </div>
 
     
@@ -7495,6 +7624,88 @@ window.addEventListener("DOMContentLoaded", function(){
 })();
 </script>
 
+<!-- v218: working Career XP rarity evolution -->
+<script>
+(function(){
+  const CARD_STATS_KEY = "drivermonBattleCardStats_v185";
+  const RARITIES = ["Bronze", "Silver", "Gold", "Platinum", "Diamond", "Final"];
+  const THRESHOLDS = {Bronze:300, Silver:800, Gold:1500, Platinum:2500, Diamond:4000};
+
+  function safe(value){
+    return String(value || "card").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 90) || "card";
+  }
+  function normal(value){ return String(value || "").trim().toLowerCase(); }
+  function cards(){
+    try{ if(Array.isArray(window.drivers)) return window.drivers; }catch(e){}
+    try{ if(typeof drivers !== "undefined" && Array.isArray(drivers)) return drivers; }catch(e){}
+    return [];
+  }
+  function cardKey(d){
+    let region = d.region || d.homeRegion || d.area || "";
+    let type = d.type || d.element || "";
+    try{ if(typeof latestRegionForDriver === "function"){ const r=latestRegionForDriver(d); if(r&&r.region) region=r.region; } }catch(e){}
+    try{ if(typeof calc === "function" && typeof driverType === "function"){ const t=driverType(d,calc(d)); if(t&&t.name) type=t.name; } }catch(e){}
+    return safe(d.uid || d.id || d.cardId || (normal(d.name||d.driverName||"card")+"_"+normal(region)+"_"+normal(type)));
+  }
+  function currentRarity(d){
+    try{ if(typeof rarity === "function" && typeof calc === "function") return rarity(Number(calc(d).score||0), d.manualRarity); }catch(e){}
+    return d.manualRarity || d.rarity || "Bronze";
+  }
+  function nextRarity(value){
+    const i=RARITIES.findIndex(r=>normal(r)===normal(value));
+    return i>=0 && i<RARITIES.length-1 ? RARITIES[i+1] : "";
+  }
+  function stats(){ try{ return JSON.parse(localStorage.getItem(CARD_STATS_KEY)||"{}"); }catch(e){ return {}; } }
+  function eligible(d){
+    const rarityNow=currentRarity(d), next=nextRarity(rarityNow), st=stats()[cardKey(d)]||{};
+    return !!next && Number(st.careerXP||0) >= Number(THRESHOLDS[rarityNow]||Infinity);
+  }
+
+  window.evolveDriverMonCard = async function(uid){
+    const d=cards().find(card=>String(card.uid||card.id||card.cardId)===String(uid));
+    if(!d){ alert("This DriverMon card could not be found."); return; }
+    const from=currentRarity(d), to=nextRarity(from), allStats=stats(), key=cardKey(d), st=allStats[key]||{};
+    if(!to){ alert(d.name+" is already at the Final evolution."); return; }
+    const needed=Number(THRESHOLDS[from]||Infinity);
+    if(Number(st.careerXP||0)<needed){ alert(d.name+" needs "+needed.toLocaleString()+" Career XP to evolve."); return; }
+    if(!confirm("Evolve "+d.name+" from "+from+" to "+to+"?")) return;
+
+    d.manualRarity=to;
+    d.rarity=to;
+    d.evolvedAt=new Date().toISOString();
+    d.evolutionStage=RARITIES.indexOf(to);
+    st.promotionAvailable=!!nextRarity(to) && Number(st.careerXP||0)>=Number(THRESHOLDS[to]||Infinity);
+    allStats[key]=st;
+    try{ localStorage.setItem(CARD_STATS_KEY,JSON.stringify(allStats)); }catch(e){}
+    try{ if(typeof saveCollection==="function") saveCollection(); }catch(e){ console.warn("Evolution save failed",e); }
+    try{ if(typeof window.dmSaveOwnedCollectionToFirebase==="function") await window.dmSaveOwnedCollectionToFirebase("evolve"); }catch(e){ console.warn("Evolution cloud save failed",e); }
+    try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
+    alert("⭐ "+d.name+" evolved from "+from+" to "+to+"!");
+  };
+
+  const previousCard=window.card;
+  if(typeof previousCard==="function" && !previousCard.__v218Evolution){
+    const evolvedCard=function(d){
+      let html=String(previousCard.apply(this,arguments));
+      const from=currentRarity(d), to=nextRarity(from), st=stats()[cardKey(d)]||{};
+      const uid=String(d.uid||d.id||d.cardId).replace(/'/g,"\\'");
+      if(eligible(d)){
+        const button='<button type="button" class="v218EvolveBtn" title="Evolve to '+to+'" onclick="event.stopPropagation(); evolveDriverMonCard(\''+uid+'\')">⭐ EVOLVE DRIVERMON</button>';
+        if(html.includes('<div class="v186Promo">')) html=html.replace(/<div class="v186Promo">[\s\S]*?<\/div>/,button);
+        else html=html.replace('<div class="power">',button+'<div class="power">');
+      }
+      return html;
+    };
+    evolvedCard.__v218Evolution=true;
+    window.card=evolvedCard;
+  }
+
+  const style=document.createElement("style");
+  style.id="v218EvolutionCss";
+  style.textContent='.v218EvolveBtn{display:block;width:calc(100% - 16px);margin:8px auto 5px;padding:8px 7px;border:2px solid #fff;border-radius:12px;background:linear-gradient(180deg,#fff16a,#ff9f00);color:#231500;font-size:11px;font-weight:1000;letter-spacing:.35px;cursor:pointer;box-shadow:0 4px 0 rgba(0,0,0,.35)}.v218EvolveBtn:active{transform:translateY(2px);box-shadow:0 2px 0 rgba(0,0,0,.35)}';
+  document.head.appendChild(style);
+})();
+</script>
 </body>
 </html>
 
@@ -8897,7 +9108,11 @@ img[alt="DriverDex"]{
     try{ if(typeof loadDriverDex === "function") loadDriverDex(); }catch(e){}
   };
 
-  function cardRegion(card){ return prettyRegion(card && (card.region || card.regionCaught || card.caughtRegion || card.homeRegion || card.location || card.area || "")); }
+  function isStarterCard(card){ return !!(card && (card.starterCard || String(card.uid || "").startsWith("starter_"))); }
+  function cardRegion(card){
+    const region = prettyRegion(card && (card.region || card.regionCaught || card.caughtRegion || card.homeRegion || card.location || card.area || ""));
+    return region || (isStarterCard(card) ? "Starter Pack" : "");
+  }
   function calcSafe(card){ try{ return typeof calc === "function" ? calc(card) : {score:Number(card && (card.score || card.power) || 0), level:"?"}; }catch(e){ return {score:0, level:"?"}; } }
   function raritySafe(score, manual){ try{ return typeof rarity === "function" ? rarity(score, manual) : (manual || "Common"); }catch(e){ return manual || "Common"; } }
   function dexKey(card){
@@ -8925,7 +9140,7 @@ img[alt="DriverDex"]{
     return Array.from(map.values()).filter(c=>cardRegion(c));
   }
   function uniqueRegions(cards, home){
-    const arr = Array.from(new Set((cards || []).map(cardRegion).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
+    const arr = Array.from(new Set((cards || []).map(cardRegion).filter(r=>r && norm(r)!==norm("Starter Pack")))).sort((a,b)=>a.localeCompare(b));
     if(home && !arr.some(r=>norm(r)===norm(home))) arr.unshift(home);
     return arr;
   }
@@ -8948,6 +9163,16 @@ img[alt="DriverDex"]{
     const cards = (typeof drivers !== "undefined" && Array.isArray(drivers)) ? drivers : [];
     return Promise.all(cards.filter(c=>cardRegion(c)).map(publishOne));
   };
+  window.seedStarterDex = function(){
+    const button = document.querySelector('.dexControls button[onclick="seedStarterDex()"]');
+    const oldText = button ? button.textContent : "";
+    if(button){ button.disabled = true; button.textContent = "Adding starter pack..."; }
+    return Promise.resolve(window.publishCollectionToDriverDex())
+      .then(()=>window.loadDriverDex())
+      .then(()=>{ if(button) button.textContent = "Starter pack added ✓"; })
+      .catch(err=>{ console.log("Starter DriverDex save failed", err); if(button) button.textContent = "Try adding starter pack again"; })
+      .finally(()=>{ if(button){ button.disabled = false; setTimeout(()=>{ button.textContent = oldText; },1800); } });
+  };
 
   window.loadDriverDex = function(){
     const grid = document.getElementById("driverDexGrid");
@@ -8959,7 +9184,8 @@ img[alt="DriverDex"]{
     window.publishCollectionToDriverDex().finally(()=>{
       const finish = globalCards => {
         const all = mergeCards(localCards, globalCards || []);
-        const fallback = localCards.map(cardRegion).find(Boolean);
+        const starterCards = localCards.filter(isStarterCard);
+        const fallback = localCards.map(cardRegion).find(r=>r && norm(r)!==norm("Starter Pack"));
         if(!home && fallback) home = saveRegionEverywhere(fallback);
         const regions = uniqueRegions(all, home);
         const homeRegion = home || "";
@@ -8967,6 +9193,8 @@ img[alt="DriverDex"]{
         const homeOwned = homePool.filter(c=>ownedKeys.has(dexKey(c)));
         const homeUnknown = homePool.filter(c=>!ownedKeys.has(dexKey(c)));
         let html = compactRegionBar(homeRegion, regions);
+        html += `<div class="dexSectionTitle">🎁 Your Starter Pack — ${starterCards.length} cards</div>`;
+        html += starterCards.length ? starterCards.map(c=>dexCardHtml(c,true)).join("") : `<div class="dexLoading">Use “Add starter pack to DriverDex” to add your starter cards.</div>`;
         html += `<div class="dexSectionTitle">🏠 Home Region: ${homeRegion ? esc(homeRegion) : "Not set"}</div>`;
         if(!homeRegion){
           html += `<div class="dexLoading">Choose your home region in your starter popup or use Change above. This makes DriverDex focus on cards from your local area.</div>`;
@@ -9493,7 +9721,7 @@ img[alt="DriverDex"]{
   }
   function selectTeam(cards, mod, salt){
     const seenRegions={}; const seenTypes={};
-    return (cards||[]).map(c=>Object.assign({}, c, {battleScore: modifiedScore(c,mod,salt)}))
+    const team=(cards||[]).map(c=>Object.assign({}, c, {battleScore: modifiedScore(c,mod,salt)}))
       .sort((a,b)=>b.battleScore-a.battleScore)
       .filter(c=>{
         if(mod.id==="diverse"){
@@ -9503,6 +9731,12 @@ img[alt="DriverDex"]{
         }
         return true;
       }).slice(0,3);
+    if(mod.id==="rarity" && team.length){
+      const lowest=team.reduce((pick,c)=>number(c.power,0)<number(pick.power,0)?c:pick,team[0]);
+      lowest.battleScore=Math.round(number(lowest.battleScore,0)*1.15);
+      lowest.raritySpotlightUnderdog=true;
+    }
+    return team;
   }
   function xpNeeded(level){ return 50 + (number(level,1) * 25); }
   function promotionThreshold(rarity){ return {Bronze:300, Silver:800, Gold:1500, Platinum:2500, Diamond:4000, Final:999999}[rarity] || 300; }
@@ -10226,4 +10460,10 @@ img[alt="DriverDex"]{
   });
   window.addEventListener("beforeunload", function(){ try{ robustSaveCollection(); }catch(e){} });
 })();
+</script>
+
+<!-- Keep the one-way transfer handlers active after all legacy trade patches. -->
+<script>
+if(typeof window.v219CreateTradeCode==="function") window.createTradeCode=window.v219CreateTradeCode;
+if(typeof window.v219ClaimTradeCode==="function") window.claimTradeCode=window.v219ClaimTradeCode;
 </script>
