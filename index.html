@@ -615,7 +615,7 @@ const tradeDb = firebase.database();
   function uploadTrade(code,card,sender,button,status){
     const tradeCard=compactTradeCard(card);
     return tradeDb.ref("trades/"+code).set({code,card:tradeCard,senderId:sender,senderDeviceId:tradeDeviceId(),sourceUid:String(card.uid),createdAt:new Date().toISOString(),claimed:false})
-      .then(()=>{ if(status) status.textContent="Trade code ready: "+code+" — it can now be claimed."; return code; })
+      .then(()=>{ if(button){ button.disabled=false; button.textContent="Show Code"; } if(status) status.textContent="Trade code ready: "+code+" — it can now be claimed."; return code; })
       .catch(err=>{ const value=activeCodes(); if(value[String(card.uid)]===code){ delete value[String(card.uid)]; try{ localStorage.setItem(ACTIVE_CODE_KEY,JSON.stringify(value)); }catch(e){} } if(button){ button.disabled=false; button.textContent="Trade"; } console.warn("Trade code failed",err); if(status) status.textContent="Trade code failed: "+(err&&err.message?err.message:"check the internet connection"); alert("Trade code failed. Check your internet connection and Firebase access."); return null; });
   }
   function installImage(card){
@@ -671,8 +671,8 @@ const tradeDb = firebase.database();
     const existing=rememberedCode(uid);
     if(existing){
       if(button){ button.disabled=true; button.textContent="Code Created"; }
-      if(status) status.textContent="Checking saved trade code: "+existing+"...";
       if(navigator.clipboard) navigator.clipboard.writeText(existing).catch(()=>{});
+      showCreatedCode(existing,status);
       if(!creatingTrades.has(String(uid))){
         const retryUpload=uploadTrade(existing,card,sender,button,status).finally(()=>creatingTrades.delete(String(uid)));
         creatingTrades.set(String(uid),retryUpload);
