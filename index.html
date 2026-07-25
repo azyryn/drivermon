@@ -10535,6 +10535,8 @@ img[alt="DriverDex"]{
   const PLAYER_ID_KEYS = ["drivermonPlayerId_v178","drivermonPlayerId_v177","drivermonPlayerId","playerId","drivermonDevicePlayerId"];
   const STABLE_PLAYER_ID_KEY = "drivermonStablePlayerId_v208";
   const DAILY_LIMITS_KEY = "drivermonDailyBattleLimits_v207_single_click";
+  const RESTRICTED_PLAYER_ID = "dm_device_wn03av4t_ms00do0y";
+  const RESTRICTED_ALLOWED_VIEWER_ID = "dm_azyryn";
 
   function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[m]));}
   function safe(s){return String(s||"player").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,90)||"player";}
@@ -10729,8 +10731,11 @@ img[alt="DriverDex"]{
   function renderRows(raw,tab){
     ensureCss(); setActiveTab(tab);
     const content=document.getElementById("leaderboardContent"); if(!content) return;
-    const all=normaliseRows(raw), rows=dedupeRows(all);
     const myId=stableId(), myName=norm(localName());
+    const all=normaliseRows(raw), rows=dedupeRows(all).filter(r=>{
+      const rowId=safe(r&&r.id);
+      return rowId!==RESTRICTED_PLAYER_ID || myId===RESTRICTED_ALLOWED_VIEWER_ID || myId===RESTRICTED_PLAYER_ID;
+    });
     const list=rows.sort((a,b)=>statValue(b,tab)-statValue(a,tab));
     const mod=todayModifier(list); window.driverMonTodayModifier=mod;
 
