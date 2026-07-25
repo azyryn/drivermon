@@ -1525,7 +1525,14 @@ let nextUid = 1000;
 const months=["January","February","March","April","May","June","July","August","September","October","November","December"];
 
 function normalizedName(name){return (name||"").toLowerCase().replace(/\s+/g," ").trim();}
-function yearsFromSince(since){const parts=(since||"May 2026").split(" ");const y=Number(parts[1]);const m=months.indexOf(parts[0]);if(isNaN(y)||m<0)return 0;return Math.max(0,(new Date()-new Date(y,m,1))/(1000*60*60*24*365.25));}
+function yearsFromSince(since){
+  if(!since)return 0;
+  const parts=String(since).trim().split(/\s+/);
+  const y=Number(parts[1]);
+  const m=months.indexOf(parts[0]);
+  if(!Number.isFinite(y)||m<0)return 0;
+  return Math.max(0,(new Date()-new Date(y,m,1))/(1000*60*60*24*365.25));
+}
 function deliveryPoints(n){if(n>=10000)return 400;if(n>=7500)return 370;if(n>=5000)return 320;if(n>=2500)return 260;if(n>=1000)return 180;if(n>=500)return 120;if(n>=250)return 80;if(n>=100)return 50;return 20;}
 function satisfactionPoints(p){
   if(p===null||p===""||isNaN(p))return 40;
@@ -1632,10 +1639,50 @@ function ability(d,c){
   return"Reliable Runner: balanced delivery stats.";
 }
 function typeOf(d,c){if((d.deliveries||0)<500)return"Rookie";if((d.deliveries||0)>=7000)return"Veteran";if((d.satisfaction||0)>=96)return"Care";return"Speed";}
-function statSpeed(d,c){return Math.min(99,Math.round(55+deliveryPoints(d.deliveries)/9+(d.satisfaction||80)/12));}
-function statCare(d,c){return Math.min(99,Math.round((d.satisfaction||75)+Math.min(10,(d.compliments||0)/100)));}
-function statReliability(d,c){return Math.min(99,Math.round(60+veteranPoints(yearsFromSince(d.since))/3+deliveryPoints(d.deliveries)/14));}
-function statEfficiency(d,c){return Math.min(99,Math.round((statSpeed(d,c)+statReliability(d,c))/2));}
+// Card ratings use gradual 40-95 scales. Missing information contributes no
+// bonus, so an unknown field falls back to the rating's base level instead of
+// silently pretending the driver has a particular result.
+function ratingNumber(value){
+  if(value===null||value===""||typeof value==="undefined")return null;
+  const n=Number(value);
+  return Number.isFinite(n)?n:null;
+}
+function ratingClamp(value,min=40,max=95){return Math.max(min,Math.min(max,Math.round(value)));}
+function ratingDeliveryFactor(value){
+  const n=ratingNumber(value);
+  if(n===null||n<=0)return 0;
+  return Math.min(1,Math.log1p(n)/Math.log1p(20000));
+}
+function ratingSatisfactionFactor(value){
+  const n=ratingNumber(value);
+  if(n===null)return 0;
+  return Math.max(0,Math.min(1,(n-70)/30));
+}
+function ratingComplimentFactor(value){
+  const n=ratingNumber(value);
+  if(n===null||n<=0)return 0;
+  return Math.min(1,Math.log1p(n)/Math.log1p(1000));
+}
+function ratingExperienceFactor(since){
+  if(!since)return 0;
+  return Math.min(1,yearsFromSince(since)/8);
+}
+function statSpeed(d,c){
+  return ratingClamp(40+40*ratingDeliveryFactor(d.deliveries)+15*ratingSatisfactionFactor(d.satisfaction));
+}
+function statCare(d,c){
+  // A visible "Why I Deliver" panel replaces the compliments section in the
+  // source screenshot, so retain the established 400-compliment estimate.
+  const visibleCompliments=ratingNumber(d.compliments)||0;
+  const estimatedCompliments=d.whyDeliver?Math.max(visibleCompliments,400):visibleCompliments;
+  return ratingClamp(40+42*ratingSatisfactionFactor(d.satisfaction)+12*ratingComplimentFactor(estimatedCompliments));
+}
+function statReliability(d,c){
+  return ratingClamp(40+26*ratingDeliveryFactor(d.deliveries)+20*ratingExperienceFactor(d.since)+8*ratingSatisfactionFactor(d.satisfaction));
+}
+function statEfficiency(d,c){
+  return ratingClamp(statSpeed(d,c)*0.45+statReliability(d,c)*0.35+statCare(d,c)*0.20);
+}
 
 function imageKey(d){
   // This belongs to the card itself, not the card's collection position.
@@ -1780,7 +1827,7 @@ function addDriverMon(){
     deliveries:Number(document.getElementById("newDeliveries").value)||0,
     satisfaction:document.getElementById("newSatisfaction").value===""?null:Number(document.getElementById("newSatisfaction").value),
     compliments:Number(document.getElementById("newCompliments").value)||0,
-    since:document.getElementById("newSince").value||"May 2026",
+    since:document.getElementById("newSince").value||"",
     ability:document.getElementById("newAbility").value||"",
     manualRarity:"Auto",
     shiny:shinyPull,
@@ -1812,7 +1859,7 @@ function updateDriverMon(){
   d.deliveries = Number(document.getElementById("newDeliveries").value)||0;
   d.satisfaction = document.getElementById("newSatisfaction").value==="" ? null : Number(document.getElementById("newSatisfaction").value);
   d.compliments = Number(document.getElementById("newCompliments").value)||0;
-  d.since = document.getElementById("newSince").value||"May 2026";
+  d.since = document.getElementById("newSince").value||"";
   d.ability = document.getElementById("newAbility").value||"";
   d.whyDeliver = document.getElementById("newWhyDeliver").checked;
   d.whiteDriver = document.getElementById("newWhite").checked;
