@@ -1860,14 +1860,17 @@ window.addEventListener("DOMContentLoaded", function(){
       </div></details>
 
       <details class="dmFaqSection"><summary>How does the DriverDex work?</summary><div class="dmFaqAnswer">
-        <p>The DriverDex organises your Starter Pack, home-region cards and cards caught elsewhere. Published cards discovered through other players may appear as mysteries until you collect your own copy.</p>
+        <p>The DriverDex organises your Starter Pack, home-region cards and cards caught elsewhere. Published cards discovered through other players may appear as mysteries until you collect your own copy or encounter that card in battle. Cards seen in battle reveal their face and details but are not treated as cards you own.</p>
         <p>The DriverDex also records card totals, Shiny cards, high-rarity cards and worldwide discoveries. Internet access is required for shared discoveries.</p>
       </div></details>
 
       <details class="dmFaqSection"><summary>How do battles work?</summary><div class="dmFaqAnswer">
-        <ul><li>Both players need at least one published card.</li><li>The game automatically selects up to three different available cards after applying today's modifier.</li><li>Each selected card can fight only once in that battle. If either player has fewer than three available cards, fewer rounds are played.</li><li>The higher modified battle score wins each round.</li><li>An exact tie goes to the attacking team.</li><li>The player winning the most rounds wins the battle.</li></ul>
+        <ul><li>Both players need at least one published card.</li><li>The attacker chooses one, two or three different available cards and the order in which they fight. An optional Auto-pick button can choose the strongest team.</li><li>The defending team is selected automatically and stays hidden until the battle begins.</li><li>The selection screen shows normal power and a preview of power with today's modifier.</li><li>Each selected card can fight only once in that battle. Choosing fewer cards creates fewer rounds.</li><li>The higher modified battle score wins each round.</li><li>An exact tie goes to the attacking team.</li><li>The player winning the most rounds wins the battle.</li></ul>
+        <p>For fairness, each attacking card is paired with the opponent's unused card having the closest modified power. If your card is more than 10% weaker, it receives a temporary underdog boost that closes most of the gap, capped at +50%. This boost applies only to that round and never changes the card's permanent power.</p>
+        <p>If the closest opponent is more than twice as powerful, the round becomes a protected Training Challenge. A loss gives the trainee +5 XP instead of removing XP. A win still receives the normal winning rewards.</p>
+        <p>Each completed round includes a fictional adult-humour Battle Dispatch. It combines the actual cards, winner, card type, region and matchup with a large bank of local-area, fast-food, delivery, police and car-trouble incidents. Stories are generated consistently from the battle, so refreshing does not reroll the report.</p>
         <p>You may attack each opponent once per local calendar day. The opponent can still independently attack you. Cards used for an attack enter cooldown until the following day; defending cards do not enter cooldown.</p>
-        <p>Every battle also uses stable daily luck of approximately 94%–106%. Refreshing does not repeatedly reroll the result.</p>
+        <p>Every battle uses stable daily luck plus a small round-momentum variation. Refreshing does not repeatedly reroll the result.</p>
       </div></details>
 
       <details class="dmFaqSection"><summary>What are the Daily Battle Modifiers?</summary><div class="dmFaqAnswer">
@@ -10052,7 +10055,7 @@ img[alt="DriverDex"]{
       {id:"home", icon:"🏆", name:"LOCAL HERO", lines:["Home-region cards get +40%", "Outside-region low cards get +15%"], apply:c=>norm(c.region)===norm(getHomeRegion())?1.40:(c.level<=15?1.15:1.00)},
       {id:"school", icon:"🎒", name:"SCHOOL RUN", lines:["Level 1–20 cards get +35%", "Under 1200 power gets another +15%"], apply:c=>(c.level<=20?1.35:1.00)*(c.power<1200?1.15:1.00)},
       {id:"fuel", icon:"⛽", name:"FUEL CRISIS", lines:["Lowest-power cards gain +30%", "Big cards are less dominant"], apply:c=>c.power<1200?1.30:(c.power>2500?0.90:1.05)},
-      {id:"diverse", icon:"🗺️", name:"DIVERSE ROUTE", lines:["Auto-team favours different regions", region2+" support cards get +15%"], apply:c=>norm(c.region)===norm(region2)?1.15:1.08}
+      {id:"diverse", icon:"🗺️", name:"DIVERSE ROUTE", lines:["All cards get at least +8%", region2+" support cards get +15%"], apply:c=>norm(c.region)===norm(region2)?1.15:1.08}
     ];
     const mod=mods[seed % mods.length]; mod.date=todayKey(); mod.seed=seed; return mod;
   }
@@ -10089,18 +10092,19 @@ img[alt="DriverDex"]{
   function xpNeeded(level){ return 50 + (number(level,1) * 25); }
   function promotionThreshold(rarity){ return {Bronze:300, Silver:800, Gold:1500, Platinum:2500, Diamond:4000, Final:999999}[rarity] || 300; }
   function nextRarity(r){ const i=RARITY_ORDER.findIndex(x=>norm(x)===norm(r)); return i>=0 && i<RARITY_ORDER.length-1 ? RARITY_ORDER[i+1] : ""; }
-  function awardCardXP(team, winningUidSet, mvpUid){
+  function awardCardXP(team, winningUidSet, mvpUid, trainingUidSet){
     const stats=getBattleStats(); const updates=[];
+    trainingUidSet=trainingUidSet||new Set();
     team.forEach(card=>{
       const key=cardKey(card); const st=stats[key] || {xp:0,careerXP:0,battles:0,wins:0,bonusPower:0,bonusLevel:0,promotionAvailable:false};
-      const won = winningUidSet.has(key); let gain = won ? 25 : -10;
+      const won = winningUidSet.has(key), trainingProtected=trainingUidSet.has(key); let gain = trainingProtected ? 5 : (won ? 25 : -10);
       if(key===mvpUid) gain += 10;
       if(won && card.power < 1200) gain += 15;
       st.xp = Math.max(0,number(st.xp,0) + gain); st.careerXP = Math.max(0,number(st.careerXP,0) + gain); st.battles = number(st.battles,0) + 1; if(won) st.wins = number(st.wins,0) + 1;
       let levelUps=0; let needed=xpNeeded(number(card.level,1)+number(st.bonusLevel,0));
       while(st.xp >= needed && levelUps < 5){ st.xp -= needed; st.bonusLevel = number(st.bonusLevel,0) + 1; st.bonusPower = number(st.bonusPower,0) + 10; levelUps++; needed=xpNeeded(number(card.level,1)+number(st.bonusLevel,0)); }
       if(nextRarity(card.rarity) && st.careerXP >= promotionThreshold(card.rarity)) st.promotionAvailable = true;
-      stats[key]=st; updates.push({name:card.name,gain,levelUps,promotion:st.promotionAvailable,next:nextRarity(card.rarity),xp:st.xp,needed});
+      stats[key]=st; updates.push({name:card.name,gain,trainingProtected,levelUps,promotion:st.promotionAvailable,next:nextRarity(card.rarity),xp:st.xp,needed});
     });
     setBattleStats(stats); return updates;
   }
@@ -10113,7 +10117,7 @@ img[alt="DriverDex"]{
     `;
     document.head.appendChild(st);
   }
-  function modifierHtml(mod){ return `<div class="v185Mod"><div class="v185ModIcon">${esc(mod.icon)}</div><div><div class="v185Kicker">Today&apos;s Battle Modifier</div><div class="v185ModName">${esc(mod.name)}</div><div class="v185Pills">${mod.lines.map(x=>`<span class="v185Pill">${esc(x)}</span>`).join("")}</div></div></div>`; }
+  function modifierHtml(mod){ return `${localBattleTestMode()?`<div class="v185SmallNote" style="margin:0 0 10px;padding:9px 12px;border-radius:12px;background:#34db75;color:#062b17;text-align:center;">🧪 LOCAL TEST MODE — daily battle limits and card cooldowns are disabled in this preview</div>`:""}<div class="v185Mod"><div class="v185ModIcon">${esc(mod.icon)}</div><div><div class="v185Kicker">Today&apos;s Battle Modifier</div><div class="v185ModName">${esc(mod.name)}</div><div class="v185Pills">${mod.lines.map(x=>`<span class="v185Pill">${esc(x)}</span>`).join("")}</div></div></div>`; }
   function cardMini(c, score){ c=hydratePublicCard(c); return `<div class="v185Mini ${esc(c.rarity)} ${c.shiny?'shiny':''}"><div class="v185Face">${c.face?`<img src="${esc(c.face)}" alt="${esc(c.name)}">`:`<span aria-label="Face unavailable">${esc(String(c.name||"D").charAt(0).toUpperCase())}</span>`}</div><div class="v185Name">${esc(c.name)}</div><div class="v185Meta">Lv ${esc(c.level)} • ${esc(c.type)}<br>${esc(c.region)} • ${esc(c.rarity)}</div><div class="v185Score">Battle ${Number(score||c.battleScore||c.power||0).toLocaleString()}</div></div>`; }
 
   function renderLeaderboard(rows, metric){
@@ -10156,27 +10160,194 @@ img[alt="DriverDex"]{
     return obj;
   }
   function setDailyLimits(obj){ try{ localStorage.setItem(DAILY_LIMITS_KEY, JSON.stringify(obj||{})); }catch(e){} }
+  function localBattleTestMode(){ try{ return window.location && window.location.protocol === "file:"; }catch(e){ return false; } }
   function battleAttackKey(opponentId){
     const opponent = String(opponentId || "")
       .replace(/[^a-zA-Z0-9_-]/g, "_")
       .slice(0, 90);
     return opponent || "__missing_opponent__";
   }
-  function hasBattledOpponentToday(opponentId){ const d=getDailyLimits(); return !!d.battledOpponents[battleAttackKey(opponentId)]; }
+  function hasBattledOpponentToday(opponentId){ if(localBattleTestMode()) return false; const d=getDailyLimits(); return !!d.battledOpponents[battleAttackKey(opponentId)]; }
   function markDailyBattle(opponentId, team){
+    if(localBattleTestMode()) return;
     const d=getDailyLimits();
     d.battledOpponents[battleAttackKey(opponentId)] = Date.now();
     (team||[]).forEach(c=>{ d.usedCards[cardKey(c)] = Date.now(); });
     setDailyLimits(d);
   }
   function getAvailableLocalCards(){
+    if(localBattleTestMode()) return getLocalCards();
     const d=getDailyLimits();
     return getLocalCards().filter(c=>!d.usedCards[cardKey(c)]);
   }
 
+  const pendingManualBattles=new Map();
+  function ensureManualBattleCss(){
+    if(document.getElementById("v225ManualBattleCss")) return;
+    const st=document.createElement("style"); st.id="v225ManualBattleCss";
+    st.textContent=`.v225ChooseHead{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin:12px 0}.v225ChooseCount{font-weight:1000;color:#ffdf38}.v225CardGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:10px;margin:12px 0}.v225Pick{appearance:none;border:3px solid rgba(255,255,255,.38);border-radius:16px;padding:8px;background:rgba(5,24,62,.92);color:white;cursor:pointer;text-align:center;position:relative;box-shadow:0 5px 0 rgba(0,0,0,.28);transition:.15s transform,.15s border-color}.v225Pick:hover{transform:translateY(-2px)}.v225Pick.selected{border-color:#ffdf38;box-shadow:0 0 0 3px rgba(255,223,56,.35),0 5px 0 rgba(0,0,0,.28)}.v225PickOrder{position:absolute;right:4px;top:4px;z-index:30;width:30px;height:30px;border-radius:50%;display:none;place-items:center;background:#ffdf38;color:#071a3b;border:3px solid white;box-shadow:0 3px 6px rgba(0,0,0,.55);font-size:15px;line-height:1;font-weight:1000;pointer-events:none}.v225Pick.selected .v225PickOrder{display:grid}.v225Pick .v185Mini{min-height:120px;pointer-events:none}.v225Power{font-size:11px;font-weight:1000;margin-top:7px;color:#ffdf38}.v225ChooseActions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}.v225ChooseActions button{width:100%;margin:0!important}.v225Confirm:disabled{opacity:.45;cursor:not-allowed}.v185Round{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(230px,.65fr);gap:12px;align-items:stretch}.v185RoundTitle{grid-column:1/-1}.v225Dispatch{margin-top:0;border:2px solid #ffcf32;border-radius:15px;overflow:hidden;background:linear-gradient(135deg,rgba(28,8,24,.96),rgba(5,25,61,.96));box-shadow:0 5px 0 rgba(0,0,0,.28);display:flex;flex-direction:column}.v225DispatchHead{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 11px;background:linear-gradient(90deg,#d51625,#ff6a00);color:white;font-size:11px;font-weight:1000;letter-spacing:.7px;text-transform:uppercase}.v225DispatchLive{background:#fff;color:#c20d1b;border-radius:999px;padding:3px 7px;white-space:nowrap}.v225DispatchBody{padding:11px 13px;font-size:13px;font-weight:900;line-height:1.42;color:#fff;flex:1;display:flex;align-items:center}.v225DispatchTags{display:flex;flex-wrap:wrap;gap:6px;padding:0 12px 11px}.v225DispatchTag{font-size:10px;font-weight:1000;border:1px solid rgba(255,255,255,.32);background:rgba(255,255,255,.12);border-radius:999px;padding:4px 7px;color:#ffdf38}@media(max-width:800px){.v185Round{display:block}.v185RoundTitle{margin-bottom:8px}.v225Dispatch{margin-top:12px}}@media(max-width:560px){.v225CardGrid{grid-template-columns:repeat(2,minmax(0,1fr))}.v225ChooseActions{grid-template-columns:1fr}}`;
+    document.head.appendChild(st);
+  }
+  function scoreChosenTeam(cards,mod){
+    const team=(cards||[]).map((c,i)=>Object.assign({},c,{battleScore:modifiedScore(c,mod,"me"+i)}));
+    if(mod.id==="rarity"&&team.length){
+      const lowest=team.reduce((pick,c)=>number(c.power,0)<number(pick.power,0)?c:pick,team[0]);
+      lowest.battleScore=Math.round(number(lowest.battleScore,0)*1.15); lowest.raritySpotlightUnderdog=true;
+    }
+    return team;
+  }
+  function matchOpponentTeam(myTeam,theirs,mod){
+    const remaining=[]; const seen=new Set();
+    (theirs||[]).forEach(card=>{ const key=cardKey(card); if(!seen.has(key)){ seen.add(key); remaining.push(card); } });
+    return (myTeam||[]).map((attacker,index)=>{
+      if(!remaining.length) return null;
+      let bestIndex=0, bestScore=modifiedScore(remaining[0],mod,"op-match"+index), bestGap=Math.abs(bestScore-number(attacker.battleScore,0));
+      for(let i=1;i<remaining.length;i++){
+        const score=modifiedScore(remaining[i],mod,"op-match"+index), gap=Math.abs(score-number(attacker.battleScore,0));
+        if(gap<bestGap){ bestIndex=i; bestScore=score; bestGap=gap; }
+      }
+      const picked=Object.assign({},remaining.splice(bestIndex,1)[0]); picked.battleScore=bestScore; return picked;
+    }).filter(Boolean);
+  }
+  function balancedRoundScores(attacker,defender,index){
+    const originalAttack=number(attacker.battleScore,0), originalDefence=number(defender.battleScore,0);
+    let boostedAttack=originalAttack, boostPct=0, trainingProtected=false;
+    if(originalAttack>0&&originalDefence>originalAttack*1.10){
+      const deficit=(originalDefence-originalAttack)/originalAttack;
+      if(deficit>1){ trainingProtected=true; }
+      else{ boostPct=Math.min(.50,deficit*.85); boostedAttack=Math.round(originalAttack*(1+boostPct)); }
+    }
+    const attackMomentum=.92+((hash(todayKey()+cardKey(attacker)+"attack-momentum"+index)%17)/100);
+    const defenceMomentum=.92+((hash(todayKey()+cardKey(defender)+"defence-momentum"+index)%17)/100);
+    const as=Math.round(boostedAttack*attackMomentum), bs=Math.round(originalDefence*defenceMomentum);
+    const ratio=originalDefence?originalAttack/originalDefence:1;
+    const label=trainingProtected?"Training Challenge":(ratio>=.90&&ratio<=1.10?"Even Match":(ratio<1?"Underdog Match":"Power Advantage"));
+    return {as,bs,boostPct,trainingProtected,label,originalAttack,originalDefence};
+  }
+  const BATTLE_DISPATCH_REGIONS={
+    "Brisbane":["[Loser] took the Riverside Expressway at peak hour. [Winner] could have walked the card over the line faster.","[Winner] survived Brisbane roadworks and a lane that suddenly stopped existing; [Loser] is still paying for parking.","[Loser] missed one CBD turn and the GPS quietly gave up on the relationship."],
+    "Gold Coast":["[Loser] stopped in Surfers to rev at strangers. [Winner] finished while everyone blamed another rented Lamborghini.","[Winner] survived the M1, three influencers and a shirtless bloke in a convertible.","[Loser] spent the round looking for a beach park and returned with a fine and no dignity."],
+    "Logan":["Someone allegedly tried to carjack [Winner] in Logan. [Winner] recovered the card and still beat [Loser].","[Loser] entered Logan with four wheels and finished with three and a Marketplace listing.","[Winner] activated central locking before the round. That sort of preparation wins battles in Logan."],
+    "Ipswich":["[Loser] hit an Ipswich pothole so deep the GPS changed the destination to the Earth's mantle.","[Winner] used raw [Type] power and the desperate desire to leave Ipswich before dark.","[Loser] investigated a suspicious noise. The noise was the entire car asking to be put out of its misery."],
+    "Sunshine Coast":["[Loser] got trapped behind a retiree doing 43 in an 80 zone. [Winner] had lunch and still won.","[Winner] took the coast road; [Loser] found seventeen roundabouts and one caravan refusing to fucking move.","[Loser] stopped for an açai bowl and returned broke, late and carrying a parking ticket."],
+    "Toowoomba":["[Winner] climbed the Range on pure [Type] power while [Loser] overheated halfway up.","[Loser] tried overtaking on the Range. The DriverMon's final confident words were 'yeah, she'll be right.'","[Winner] survived the fog, the hill and a servo pie of uncertain age."],
+    "Northern Rivers":["[Loser] vanished behind a campervan doing twenty under the limit.","[Winner] crossed the border before [Loser] realised daylight saving had fucked the battle time.","[Loser] stopped in Byron for coffee and returned with crystals, linen pants and no interest in competitive capitalism."],
+    "Sydney":["[Loser] spent the round paying tolls. [Winner] could have bought another DriverMon for less.","[Winner] travelled six kilometres through Sydney in only ninety minutes—an apparent miracle.","[Loser] missed one motorway exit and is now legally considered a Newcastle resident."],
+    "Melbourne":["[Loser] attempted a hook turn, panicked and accidentally joined the tram network.","[Winner] survived four seasons, twelve cyclists and a bloke explaining why Melbourne is better than Sydney.","[Loser] ordered a coffee so specialised the battle ended before the barista finished explaining it."],
+    "Adelaide":["[Loser] missed the turn because Adelaide copied and pasted the same CBD street fifty times.","[Winner] completed the round before Adelaide closed for the evening at 4:37 pm.","[Loser] stopped for one drink and woke near Hindley Street with one shoe and a kebab receipt."],
+    "Perth":["[Loser] challenged from the other side of Perth. The round required two fuel stops and a packed lunch.","[Winner] crossed Perth before [Loser] finished complaining about eastern states people moving there.","[Loser] ran out of fuel and was discovered beside a new housing estate three days later."],
+    "Darwin":["[Loser] left the windows open. A Darwin mosquito stole the card and now has 2,400 power.","[Winner] survived the humidity, a questionable servo feed and something enormous moving near the bins.","[Loser] tried cooling the engine by driving faster. Darwin physics told the car to get fucked."],
+    "Hobart":["[Loser] got trapped behind a tourist photographing the same mountain for forty minutes.","[Loser] underestimated the Hobart hill. The hill did not underestimate [Loser].","[Winner] used maximum power to escape a street designed when vehicles were apparently six inches wide."],
+    "International":["[Loser] was detained at customs after declaring nothing except an unusually powerful DriverMon.","[Winner] crossed three time zones, two borders and one deeply suspicious airport bathroom.","[Loser] arrived without the correct visa. [Winner] advanced by administrative default."],
+    "Generic":["[Winner] found a suspiciously convenient shortcut while [Loser] argued with the GPS.","[Loser] arrived with a brilliant plan. [Winner] arrived with snacks and somehow won anyway.","The crowd yelled GO; [Winner] heard GO FASTER and [Loser] heard take a tea break."]
+  };
+  const BATTLE_DISPATCH_INCIDENTS=[
+    ["Maccas","The Maccas bag split and dumped emergency chips beneath [Loser]'s brake pedal."],
+    ["Maccas","[Loser] ate both burgers and claimed the second one was quality control."],
+    ["Maccas","Order 184 contained order 148, a melted McFlurry and somebody else's emotional baggage."],
+    ["Maccas","[Winner] restored battle power using a cheeseburger discovered under the passenger seat."],
+    ["KFC","One speed bump converted six KFC drinks into a Pepsi-themed passenger-seat water park."],
+    ["KFC","[Loser] inspected the KFC bag and accidentally quality-assured three Wicked Wings into their mouth."],
+    ["KFC","A large gravy achieved low Earth orbit while [Winner] calmly took the round."],
+    ["KFC","The customer reported missing chips. Potato salt across [Loser]'s face remains unexplained."],
+    ["Fast Food","[Loser] entered the drive-through and is expected back sometime next financial year."],
+    ["Fast Food","A broken drink tray dealt splash damage to the car, the card and [Loser]'s remaining self-respect."],
+    ["Police","Police asked [Winner] how fast the DriverMon was going. The answer was 'fast enough for +25 XP.'"],
+    ["Police","[Loser] explained why the car had three number plates and none matched the registration."],
+    ["Police","The bald tyres were described as a daily modifier. Police were unfamiliar with the lore."],
+    ["Police","[Winner] won the round and immediately spent the prize money on an infringement notice."],
+    ["Car Trouble","[Loser] pressed the accelerator and the check-engine light replied 'absolutely fucking not.'"],
+    ["Car Trouble","The shitbox was held together by zip ties, faded delivery stickers and financial desperation."],
+    ["Car Trouble","[Loser] turned up the stereo until the engine knock became someone else's problem."],
+    ["Car Trouble","One tyre was new, two were bald and the fourth was 'basically unused' on Marketplace."],
+    ["Delivery Chaos","The customer wrote 'easy to find' from inside forty identical apartment buildings."],
+    ["Delivery Chaos","The map pin was in a lake. The customer still messaged 'where are you?'"],
+    ["Delivery Chaos","The lift was broken and the customer considered the lobby another country."],
+    ["Delivery Chaos","The note said leave at door. A dog the size of a Suzuki Swift had other instructions."],
+    ["Delivery Chaos","The customer appeared silently behind [Loser] like a fucking horror-movie villain."],
+    ["Dodgy Delivery","[Loser] left the keys in the ignition. Someone else is now accepting the next order."],
+    ["Dodgy Delivery","The replacement engine came from Marketplace; the seller immediately deleted their account."],
+    ["Dodgy Delivery","Someone stole [Winner]'s wheels during loading. [Winner] battled on bricks and still won."],
+    ["Dodgy Delivery","A shirtless bloke supplied detailed directions to a house directly across the road."],
+    ["Servo Life","Ten dollars of fuel moved the gauge by absolutely fucking nothing."],
+    ["Servo Life","[Loser] bought an energy drink instead of coolant. The engine has lodged a complaint."],
+    ["Servo Life","A servo pie delivered immediate power and consequences scheduled for later."],
+    ["Battle Damage","[Winner] repossessed [Loser]'s dignity and listed it on Marketplace."],
+    ["Battle Damage","[Loser]'s performance was sealed in a Maccas bag and placed directly in the bin."],
+    ["Battle Damage","The delivery app watched [Loser]'s defeat and asked if they were still online."],
+    ["Battle Damage","[Loser] blamed traffic, roadworks, fuel prices, the GPS and Queensland Transport."],
+    ["Battle Damage","[Winner] had [Type] power. [Loser] had an oil leak and dangerously misplaced confidence."]
+  ];
+  const BATTLE_DISPATCH_SPECIAL={
+    shiny:["[Winner] sparkled so brightly that [Loser] missed the start while looking for sunglasses.","The Shiny card blinded [Loser], two pedestrians and an innocent bloke at a bus stop.","[Winner] activated Shiny mode. [Loser]'s insurance immediately stopped returning calls.","The Shiny DriverMon looked expensive, performed brilliantly and is almost certainly uninsured."],
+    underdog:["Nobody told [Attacker] about the power gap. Tiny-card fury handled the rest.","[Defender] brought legendary power; [Attacker] brought spite, caffeine and nothing left to lose.","[Attacker]'s car was worth less than [Defender]'s tyres. The engine had not received that information.","[Attacker] attempted the upset using luck, rage and dangerously misplaced confidence."],
+    training:["[Attacker] finished without losing a wheel or eating the customer's order. Five XP earned.","The training card survived. The gearbox didn't, but evolution requires sacrifice.","[Attacker] lost by several postcodes but earned five XP for maintaining bowel control.","[Attacker] called the arse-kicking valuable training and quietly deleted the dashcam footage."],
+    loss:["[Loser] has requested the footage be hidden from friends, family and insurance providers.","[Loser] insists the result is under investigation. Nobody else is investigating it."]
+  };
+  function dispatchFill(text,data){ return String(text||"").replace(/\[(Winner|Loser|Attacker|Defender|Type|Region)\]/g,(m,key)=>data[key]||m); }
+  function battleDispatch(round,index){
+    const winner=round.win==="me"?round.a:round.b, loser=round.win==="me"?round.b:round.a;
+    const region=(winner.region&&winner.region!=="Unknown"?winner.region:loser.region)||"Generic";
+    const data={Winner:winner.name||"The winner",Loser:loser.name||"The loser",Attacker:round.a.name||"The attacker",Defender:round.b.name||"The defender",Type:winner.type||"mystery",Region:region};
+    const seed=hash(todayKey()+cardKey(round.a)+cardKey(round.b)+round.as+round.bs);
+    const regional=BATTLE_DISPATCH_REGIONS[region]||BATTLE_DISPATCH_REGIONS.Generic;
+    const regionalLine=regional[(hash(todayKey()+region+"dispatch-rotation")+index)%regional.length];
+    const incident=BATTLE_DISPATCH_INCIDENTS[(seed+index*11)%BATTLE_DISPATCH_INCIDENTS.length];
+    let text="", category="Local Report", specialTag="";
+    if(round.balance.trainingProtected){ specialTag="Training Challenge"; category="Training"; text=BATTLE_DISPATCH_SPECIAL.training[(hash(todayKey()+"training-dispatch")+index)%BATTLE_DISPATCH_SPECIAL.training.length]; }
+    else if(round.balance.boostPct){ specialTag="Underdog Chaos"; category="Underdog"; text=BATTLE_DISPATCH_SPECIAL.underdog[(hash(todayKey()+"underdog-dispatch")+index)%BATTLE_DISPATCH_SPECIAL.underdog.length]; }
+    else if(winner.shiny){ specialTag="Shiny Incident"; category="Shiny"; text=BATTLE_DISPATCH_SPECIAL.shiny[(hash(todayKey()+"shiny-dispatch")+index)%BATTLE_DISPATCH_SPECIAL.shiny.length]; }
+    else if(index%2===0){ text=regionalLine; }
+    else{ category=incident[0]; text=incident[1]; }
+    return {region,category,specialTag,text:dispatchFill(text,data)};
+  }
+  function battleDispatchHtml(round,index){
+    const report=battleDispatch(round,index);
+    return `<div class="v225Dispatch"><div class="v225DispatchHead"><span>📻 DriverMon Battle Dispatch</span><span class="v225DispatchLive">LIVE-ish</span></div><div class="v225DispatchBody">${esc(report.text)}</div><div class="v225DispatchTags"><span class="v225DispatchTag">📍 ${esc(report.region)}</span><span class="v225DispatchTag">${esc(report.category)}</span>${report.specialTag?`<span class="v225DispatchTag">${esc(report.specialTag)}</span>`:""}</div></div>`;
+  }
+  function renderManualBattlePicker(token){
+    const state=pendingManualBattles.get(token), content=document.getElementById("leaderboardContent");
+    if(!state||!content) return;
+    const selected=new Set(state.selected);
+    const count=state.selected.length;
+    content.innerHTML=`${modifierHtml(state.mod)}<div class="v185BattlePage"><button class="v185Back" onclick="showLeaderboardTab('battleRating')">← Back to Leaderboard</button><div class="v185BattleTitle">Choose your battle team</div><div class="v185BattleMeta">Pick 1–3 different DriverMon to battle ${esc(state.opp.name)}. Tap them in the order you want them to fight. The opponent&apos;s team stays hidden until the battle starts.</div><div class="v225ChooseHead"><span class="v225ChooseCount">${count}/3 selected</span><span class="v185SmallNote">Daily battle power includes today&apos;s modifier.</span></div><div class="v225CardGrid">${state.mine.map(card=>{ const key=cardKey(card), order=state.selected.indexOf(key)+1, preview=modifiedScore(card,state.mod,"me-preview"); return `<button type="button" class="v225Pick ${selected.has(key)?"selected":""}" onclick="toggleManualBattleCard('${esc(token)}','${esc(key)}')"><span class="v225PickOrder">${order||""}</span>${cardMini(card,preview)}<div class="v225Power">Normal ${Number(card.power||0).toLocaleString()} → Today ${Number(preview).toLocaleString()}</div></button>`; }).join("")}</div><div class="v225ChooseActions"><button type="button" class="v185Back" onclick="autoPickManualBattle('${esc(token)}')">✨ Auto-pick best team</button><button type="button" class="v185Start v225Confirm" ${count?"":"disabled"} onclick="confirmManualBattle('${esc(token)}')">⚔ Start Battle with ${count||0} card${count===1?"":"s"}</button></div><div class="v185SmallNote">Only the cards you use will go onto daily cooldown. Winning low-power cards can still earn their extra XP reward.</div></div>`;
+  }
+  window.toggleManualBattleCard=function(token,key){
+    const state=pendingManualBattles.get(token); if(!state) return;
+    const at=state.selected.indexOf(key);
+    if(at>=0) state.selected.splice(at,1); else if(state.selected.length<3) state.selected.push(key); else return;
+    renderManualBattlePicker(token);
+  };
+  window.autoPickManualBattle=function(token){
+    const state=pendingManualBattles.get(token); if(!state) return;
+    state.selected=selectTeam(state.mine,state.mod,"me").map(cardKey); renderManualBattlePicker(token);
+  };
+  window.confirmManualBattle=function(token){
+    const state=pendingManualBattles.get(token), content=document.getElementById("leaderboardContent");
+    if(!state||!content||!state.selected.length) return;
+    if(hasBattledOpponentToday(state.opponentId)){ pendingManualBattles.delete(token); startBattle(state.opponentId); return; }
+    const chosen=state.selected.map(key=>state.mine.find(c=>cardKey(c)===key)).filter(Boolean).slice(0,3);
+    if(!chosen.length) return;
+    const myTeam=scoreChosenTeam(chosen,state.mod), opTeam=matchOpponentTeam(myTeam,state.theirs,state.mod);
+    rememberBattleFaces(opTeam);
+    const rounds=[]; let myWins=0, opWins=0, maxCard=null, maxScore=-1;
+    const roundCount=Math.min(3,myTeam.length,opTeam.length);
+    for(let i=0;i<roundCount;i++){
+      const a=myTeam[i], b=opTeam[i], balance=balancedRoundScores(a,b,i), as=balance.as, bs=balance.bs;
+      const win=as>=bs?"me":"op"; if(win==="me") myWins++; else opWins++;
+      if(win==="me"&&as>maxScore){ maxScore=as; maxCard=a; } rounds.push({a,b,as,bs,win,balance});
+    }
+    const battleWon=myWins>=opWins, winningUidSet=new Set(rounds.filter(r=>r.win==="me").map(r=>cardKey(r.a))), trainingUidSet=new Set(rounds.filter(r=>r.win!=="me"&&r.balance.trainingProtected).map(r=>cardKey(r.a))), mvpUid=maxCard?cardKey(maxCard):"";
+    const rewards=awardCardXP(myTeam,winningUidSet,mvpUid,trainingUidSet);
+    markDailyBattle(state.opponentId,myTeam);
+    const oldRating=getRating(), ratingChange=battleWon?15:-8, newRating=setRating(oldRating+ratingChange);
+    pendingManualBattles.delete(token); publish();
+    content.innerHTML=`${modifierHtml(state.mod)}<div class="v185BattlePage"><button class="v185Back" onclick="showLeaderboardTab('battleRating')">← Back to Leaderboard</button><div class="v185BattleTitle">⚔ Battle vs ${esc(state.opp.name||"Opponent")}</div><div class="v185BattleMeta">You chose your attacking team and order. The opponent used the closest available power matches. Result: <b style="color:#ffdf38;">${battleWon?"YOU WON":"YOU LOST"} ${myWins}-${opWins}</b> • Rating ${oldRating} → ${newRating} (${ratingChange>0?"+":""}${ratingChange})</div>${rounds.map((r,i)=>`<div class="v185Round"><div class="v185RoundTitle">Round ${i+1} • ${esc(r.balance.label)}${r.balance.boostPct?` • Underdog boost +${Math.round(r.balance.boostPct*100)}%`:""}${r.balance.trainingProtected?" • Protected training XP":""}</div><div class="v185Vs">${cardMini(r.a,r.as)}<div class="v185Result">${r.win==="me"?"WIN":"LOSE"}<br><small>${r.as} vs ${r.bs}</small></div>${cardMini(r.b,r.bs)}</div>${battleDispatchHtml(r,i)}</div>`).join("")}<div class="v185Summary"><b>Driver XP change</b><div class="v185Rewards">${rewards.map(x=>`<div class="v185Reward"><b>${esc(x.name)}</b><br>${x.gain>0?"+":""}${x.gain} XP${x.trainingProtected?" • protected training": ""}${x.levelUps?`<br>LEVEL UP x${x.levelUps} • +${x.levelUps*10} Power`:""}${x.promotion&&x.next?`<br>⭐ Promotion available to ${esc(x.next)}`:""}</div>`).join("")}</div><div class="v185SmallNote">Your selected attacking cards are now on cooldown until tomorrow. Unselected cards remain available.</div></div></div>`;
+  };
+
   function startBattle(opponentId){
-    ensureCss(); const content=document.getElementById("leaderboardContent"); if(!content) return;
-    content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Preparing hidden teams...</div><div class="leaderMeta">Reading opponent collection and applying today&apos;s modifier.</div></div></div>`;
+    ensureCss(); ensureManualBattleCss(); const content=document.getElementById("leaderboardContent"); if(!content) return;
+    content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Preparing card selection...</div><div class="leaderMeta">Reading available cards and applying today&apos;s modifier.</div></div></div>`;
     const load = (typeof tradeDb !== "undefined" && tradeDb) ? Promise.all([
       tradeDb.ref(LB_PATH+"/"+safe(opponentId)).once("value").then(s=>s.val()),
       tradeDb.ref("discoveredCards").once("value").then(s=>s.val()).catch(()=>({}))
@@ -10187,22 +10358,9 @@ img[alt="DriverDex"]{
       if(hasBattledOpponentToday(opponentId)){ content.innerHTML=`${modifierHtml(mod)}<div class="v185BattlePage"><div class="v185BattleTitle">Already battled today</div><div class="v185BattleMeta">You can attack ${esc(opp.name||"this player")} once per day. They can still attack you separately today.</div><button class="v185Back" onclick="showLeaderboardTab('battleRating')">Back to Leaderboard</button></div>`; return; }
       const mine=getAvailableLocalCards(); const theirs=enrichBattleFaces(opp.publicCollection||[], discovered);
       if(mine.length<1 || theirs.length<1){ content.innerHTML=`${modifierHtml(mod)}<div class="v185BattlePage"><div class="v185BattleTitle">Battle unavailable</div><div class="v185BattleMeta">Both players need at least one published card. If your cards are all on daily cooldown, they will unlock tomorrow.</div><button class="v185Back" onclick="showLeaderboardTab('battleRating')">Back to Leaderboard</button></div>`; return; }
-      const myTeam=selectTeam(mine,mod,"me"); const opTeam=selectTeam(theirs,mod,"op" );
-      rememberBattleFaces(opTeam);
-      const rounds=[]; let myWins=0, opWins=0; let maxCard=null, maxScore=-1;
-      const roundCount=Math.min(3,myTeam.length,opTeam.length);
-      for(let i=0;i<roundCount;i++){
-        const a=myTeam[i]; const b=opTeam[i];
-        const as=modifiedScore(a,mod,"me"+i); const bs=modifiedScore(b,mod,"op"+i); const win=as>=bs?"me":"op"; if(win==="me") myWins++; else opWins++;
-        if(as>maxScore){ maxScore=as; maxCard=a; }
-        rounds.push({a,b,as,bs,win});
-      }
-      const battleWon=myWins>=opWins; const winningUidSet=new Set(rounds.filter(r=>r.win==="me").map(r=>cardKey(r.a))); const mvpUid=maxCard?cardKey(maxCard):"";
-      const rewards=awardCardXP(myTeam, winningUidSet, mvpUid);
-      markDailyBattle(opponentId, myTeam);
-      const oldRating=getRating(); const ratingChange=battleWon?15:-8; const newRating=setRating(oldRating+ratingChange);
-      publish();
-      content.innerHTML = `${modifierHtml(mod)}<div class="v185BattlePage"><button class="v185Back" onclick="showLeaderboardTab('battleRating')">← Back to Leaderboard</button><div class="v185BattleTitle">⚔ Battle vs ${esc(opp.name||"Opponent")}</div><div class="v185BattleMeta">Teams were selected secretly by today&apos;s modifier. Result: <b style="color:#ffdf38;">${battleWon?"YOU WON":"YOU LOST"} ${myWins}-${opWins}</b> • Rating ${oldRating} → ${newRating} (${ratingChange>0?"+":""}${ratingChange})</div>${rounds.map((r,i)=>`<div class="v185Round"><div class="v185RoundTitle">Round ${i+1}</div><div class="v185Vs">${cardMini(r.a,r.as)}<div class="v185Result">${r.win==="me"?"WIN":"LOSE"}<br><small>${r.as} vs ${r.bs}</small></div>${cardMini(r.b,r.bs)}</div></div>`).join("")}<div class="v185Summary"><b>Driver XP change</b><div class="v185Rewards">${rewards.map(x=>`<div class="v185Reward"><b>${esc(x.name)}</b><br>${x.gain>0?"+":""}${x.gain} XP${x.levelUps?`<br>LEVEL UP x${x.levelUps} • +${x.levelUps*10} Power`:""}${x.promotion&&x.next?`<br>⭐ Promotion available to ${esc(x.next)}`:""}</div>`).join("")}</div><div class="v185SmallNote">Your attacking cards are now on cooldown and cannot be used again until tomorrow. The defender's cards were not changed.</div></div></div>`;
+      const token="battle_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,7);
+      pendingManualBattles.clear(); pendingManualBattles.set(token,{opponentId,opp,mod,mine,theirs,selected:[]});
+      renderManualBattlePicker(token);
     }).catch(err=>{ content.innerHTML=`<div class="leaderEntry"><div class="leaderMain"><div class="leaderName">Battle could not load</div><div class="leaderMeta">${esc(err&&err.message?err.message:err)}</div></div></div>`; });
   }
 
