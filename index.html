@@ -2552,13 +2552,13 @@ window.addEventListener("DOMContentLoaded", function(){
       <details class="dmFaqSection"><summary>How do Battle Rating and card XP work?</summary><div class="dmFaqAnswer">
         <p>Players begin at 1,000 Battle Rating. A victory adds 15 and a loss removes 8. Rating stays between 100 and 9,999.</p>
         <p>Only the attacking team's selected cards have their XP changed:</p><ul><li>Win the round: +25 XP</li><li>Lose the round: −10 XP</li><li>Attacking-team MVP: +10 XP</li><li>Win with under 1,200 base power: +15 XP</li></ul><p>XP cannot fall below zero.</p>
-        <p>Battle XP earns Bonus Levels. Every Bonus Level adds +10 battle power. Career XP is never spent and is used to unlock evolution.</p>
+        <p>Battle results change Career XP. Filling the Career XP bar for the card’s current rarity awards +25 permanent battle power and unlocks its next evolution. Career XP is never spent.</p>
       </div></details>
 
       <details class="dmFaqSection"><summary>How does evolution work?</summary><div class="dmFaqAnswer">
         <p>The evolution path is <b>Bronze → Silver → Gold → Platinum → Diamond → Final</b>.</p>
         <table><tr><th>Current rarity</th><th>Career XP needed</th><th>Evolution</th></tr><tr><td>Bronze</td><td>300</td><td>Silver</td></tr><tr><td>Silver</td><td>800</td><td>Gold</td></tr><tr><td>Gold</td><td>1,500</td><td>Platinum</td></tr><tr><td>Platinum</td><td>2,500</td><td>Diamond</td></tr><tr><td>Diamond</td><td>4,000</td><td>Final</td></tr></table>
-        <p>When the threshold is reached, an <b>Evolve DriverMon</b> button appears on the card. Confirming changes its rarity, colour and evolution stage. The card retains its driver details, image, Career XP, Battle XP, Bonus Power and battle record. Final is the maximum stage.</p>
+        <p>When the threshold is reached, the card receives +25 permanent Power and an <b>Evolve DriverMon</b> button appears. Confirming changes its rarity, colour and evolution stage. The card retains its driver details, image, Career XP, Bonus Power and battle record. Final is the maximum stage.</p>
       </div></details>
 
       <details class="dmFaqSection"><summary>How does trading work?</summary><div class="dmFaqAnswer">
@@ -8150,6 +8150,7 @@ window.addEventListener("DOMContentLoaded", function(){
   function getRating(){ try{ return num(localStorage.getItem(RATING_KEY),1000) || 1000; }catch(e){ return 1000; } }
   function getStats(){ try{ return JSON.parse(localStorage.getItem(CARD_STATS_KEY)||"{}"); }catch(e){ return {}; } }
   function xpNeeded(level){ return 50 + (num(level,1) * 25); }
+  function careerNeeded(rarityName){ return {Bronze:300,Silver:800,Gold:1500,Platinum:2500,Diamond:4000,Final:0}[rarityName]||300; }
   function getProfile(){ try{ if(typeof getPlayerProfile === "function"){ const p=getPlayerProfile(); if(p&&typeof p==="object") return p; } }catch(e){} for(const k of ["driverMonPlayerProfile","playerProfile","drivermonProfile","drivermon_player_profile"]){ try{ const raw=localStorage.getItem(k); if(raw){ const p=JSON.parse(raw); if(p&&typeof p==="object") return p; } }catch(e){} } return {}; }
   function getName(){ const p=getProfile(); return String(p.username||p.name||p.playerName||p.displayName||"Player").trim() || "Player"; }
   function getIcon(){ const p=getProfile(); for(const x of [p.avatar,p.avatarData,p.icon,p.profilePic,p.profileImage,p.image,p.photo]) if(String(x||"").startsWith("data:image")) return String(x); try{ if(typeof playerIconData !== "undefined" && String(playerIconData||"").startsWith("data:image")) return playerIconData; }catch(e){} return ""; }
@@ -8160,7 +8161,7 @@ window.addEventListener("DOMContentLoaded", function(){
   function regionFor(d){ try{ if(typeof latestRegionForDriver === "function"){ const r=latestRegionForDriver(d); if(r&&r.region) return r.region; } }catch(e){} return d.region||d.homeRegion||d.area||""; }
   function baseName(d){ return String((d&&(d.name||d.driverName||d.title))||"Unnamed Driver").trim(); }
   function cardKeyFromDriver(d){ const c=calcCard(d), t=typeFor(d,c); return safe(d.uid || d.id || d.cardId || (norm(baseName(d))+"_"+norm(regionFor(d))+"_"+norm(t.name||d.type||""))); }
-  function rarityFor(d,c){ try{ if(typeof rarity === "function") return rarity(num(c.score,0), d.manualRarity); }catch(e){} return d.manualRarity||d.rarity||"Bronze"; }
+  function rarityFor(d,c){ if(d.manualRarity)return d.manualRarity;if(d.rarity)return d.rarity;try{ if(typeof rarity === "function") return rarity(num(c.score,0), d.manualRarity); }catch(e){} return "Bronze"; }
 
   function ensureCss(){
     if(document.getElementById("v186Css")) return;
@@ -8179,11 +8180,11 @@ window.addEventListener("DOMContentLoaded", function(){
 
   function xpHtml(d){
     const stats=getStats(); const c=calcCard(d); const key=cardKeyFromDriver(d); const st=stats[key]||{};
-    const baseLevel=num(c.level || d.level || d.nameRank,1); const bonusLevel=num(st.bonusLevel,0); const shownLevel=baseLevel+bonusLevel;
-    const xp=num(st.xp,0); const needed=xpNeeded(shownLevel); const pct=Math.max(0,Math.min(100, needed?Math.round((xp/needed)*100):0));
+    const rarityName=rarityFor(d,c), needed=careerNeeded(rarityName);
     const career=num(st.careerXP,0), battles=num(st.battles,0), wins=num(st.wins,0), bonusPower=num(st.bonusPower,0);
-    if(!career && !battles && !wins && !xp && !bonusPower) return `<div class="v186XPBox"><div class="v186XPTop"><span>⚔ Career XP</span><span>0 / ${needed}</span></div><div class="v186XPBar"><div class="v186XPFill" style="width:0%"></div></div><div class="v186XPStats"><span>Battles 0</span><span>Wins 0</span><span>+0 Power</span></div></div>`;
-    return `<div class="v186XPBox"><div class="v186XPTop"><span>⚔ Career XP</span><span>${xp} / ${needed}</span></div><div class="v186XPBar"><div class="v186XPFill" style="width:${pct}%"></div></div><div class="v186XPStats"><span>Battles ${battles}</span><span>Wins ${wins}</span><span>+${bonusPower} Power</span></div>${st.promotionAvailable?`<div class="v186Promo">⭐ Promotion available</div>`:""}</div>`;
+    const final=rarityName==="Final", pct=final?100:Math.max(0,Math.min(100,needed?Math.round((career/needed)*100):0));
+    const canPromote=!final&&career>=needed;
+    return `<div class="v186XPBox"><div class="v186XPTop"><span>⚔ Career XP</span><span>${final?"MAX":career.toLocaleString()+" / "+needed.toLocaleString()}</span></div><div class="v186XPBar"><div class="v186XPFill" style="width:${pct}%"></div></div><div class="v186XPStats"><span>Battles ${battles}</span><span>Wins ${wins}</span><span>+${bonusPower} Power</span></div>${canPromote?`<div class="v186Promo">⭐ Promotion available</div>`:""}</div>`;
   }
 
   // Show XP directly on main cards, just above Power.
@@ -8205,7 +8206,7 @@ window.addEventListener("DOMContentLoaded", function(){
 
   function localCards(){
     let arr=[]; try{ if(Array.isArray(window.drivers)) arr=window.drivers; }catch(e){} try{ if(!arr.length && Array.isArray(drivers)) arr=drivers; }catch(e){}
-    return (arr||[]).filter(Boolean).map(d=>{ const c=calcCard(d); const t=typeFor(d,c); const key=cardKeyFromDriver(d); const st=getStats()[key]||{}; return {uid:key,name:baseName(d),region:regionFor(d),rarity:rarityFor(d,c),level:num(c.level||d.level||1,1)+num(st.bonusLevel,0),power:num(c.score||d.score||d.power,0)+num(st.bonusPower,0),type:t.name||d.type||"",typeIcon:t.icon||"",shiny:!!d.shiny,face:(function(){try{ if(typeof faceImages!=="undefined"&&d.img!=null&&faceImages[d.img]) return faceImages[d.img]; }catch(e){} return d.face||d.image||"";})(),battleXP:num(st.xp,0),careerXP:num(st.careerXP,0),battleWins:num(st.wins,0),battleCount:num(st.battles,0)}; });
+    return (arr||[]).filter(Boolean).map(d=>{ const c=calcCard(d); const t=typeFor(d,c); const key=cardKeyFromDriver(d); const st=getStats()[key]||{}; return {uid:key,name:baseName(d),region:regionFor(d),rarity:rarityFor(d,c),level:num(c.level||d.level||1,1),power:num(c.score||d.score||d.power,0)+num(st.bonusPower,0),type:t.name||d.type||"",typeIcon:t.icon||"",shiny:!!d.shiny,face:(function(){try{ if(typeof faceImages!=="undefined"&&d.img!=null&&faceImages[d.img]) return faceImages[d.img]; }catch(e){} return d.face||d.image||"";})(),battleXP:num(st.xp,0),careerXP:num(st.careerXP,0),battleWins:num(st.wins,0),battleCount:num(st.battles,0)}; });
   }
   function myRow(){ const cards=localCards(); const regions=new Set(cards.map(c=>c.region).filter(Boolean)); const shinies=cards.filter(c=>c.shiny).length; return {id:getId()||safe(getName()),name:getName(),icon:getIcon(),homeRegion:getHomeRegion(),battleRating:getRating(),stats:{cards:cards.length,regions:regions.size,shinies:shinies,power:cards.reduce((a,c)=>a+num(c.power,0),0)},publicCollection:cards.slice(0,240),updatedAt:Date.now(),battleSystem:"v186"}; }
   function publish(){ if(typeof tradeDb==="undefined"||!tradeDb) return Promise.resolve(myRow()); const row=myRow(); return tradeDb.ref(LB_PATH+"/"+safe(row.id)).update(row).then(()=>row).catch(()=>row); }
@@ -8626,8 +8627,10 @@ window.addEventListener("DOMContentLoaded", function(){
   }
   function normal(value){ return String(value || "").trim().toLowerCase(); }
   function cards(){
-    try{ if(Array.isArray(window.drivers)) return window.drivers; }catch(e){}
-    try{ if(typeof drivers !== "undefined" && Array.isArray(drivers)) return drivers; }catch(e){}
+    let fallback=[];
+    try{ if(Array.isArray(window.drivers)){ if(window.drivers.length) return window.drivers; fallback=window.drivers; } }catch(e){}
+    try{ if(typeof drivers !== "undefined" && Array.isArray(drivers)){ if(drivers.length) return drivers; fallback=drivers; } }catch(e){}
+    if(fallback.length) return fallback;
     return [];
   }
   function cardKey(d){
@@ -8638,6 +8641,8 @@ window.addEventListener("DOMContentLoaded", function(){
     return safe(d.uid || d.id || d.cardId || (normal(d.name||d.driverName||"card")+"_"+normal(region)+"_"+normal(type)));
   }
   function currentRarity(d){
+    if(d&&d.manualRarity&&RARITIES.some(r=>normal(r)===normal(d.manualRarity))) return RARITIES.find(r=>normal(r)===normal(d.manualRarity));
+    if(d&&d.rarity&&RARITIES.some(r=>normal(r)===normal(d.rarity))) return RARITIES.find(r=>normal(r)===normal(d.rarity));
     try{ if(typeof rarity === "function" && typeof calc === "function") return rarity(Number(calc(d).score||0), d.manualRarity); }catch(e){}
     return d.manualRarity || d.rarity || "Bronze";
   }
@@ -8652,7 +8657,7 @@ window.addEventListener("DOMContentLoaded", function(){
   }
 
   window.evolveDriverMonCard = async function(uid){
-    const d=cards().find(card=>String(card.uid||card.id||card.cardId)===String(uid));
+    const d=cards().find(card=>String(card.uid||card.id||card.cardId||cardKey(card))===String(uid)||cardKey(card)===String(uid));
     if(!d){ alert("This DriverMon card could not be found."); return; }
     const from=currentRarity(d), to=nextRarity(from), allStats=stats(), key=cardKey(d), st=allStats[key]||{};
     if(!to){ alert(d.name+" is already at the Final evolution."); return; }
@@ -8660,11 +8665,14 @@ window.addEventListener("DOMContentLoaded", function(){
     if(Number(st.careerXP||0)<needed){ alert(d.name+" needs "+needed.toLocaleString()+" Career XP to evolve."); return; }
     if(!confirm("Evolve "+d.name+" from "+from+" to "+to+"?")) return;
 
+    st.careerPowerAwards=st.careerPowerAwards&&typeof st.careerPowerAwards==="object"?st.careerPowerAwards:{};
+    if(!st.careerPowerAwards[from]){st.careerPowerAwards[from]=true;st.bonusPower=Number(st.bonusPower||0)+25;}
     d.manualRarity=to;
     d.rarity=to;
     d.evolvedAt=new Date().toISOString();
     d.evolutionStage=RARITIES.indexOf(to);
     st.promotionAvailable=!!nextRarity(to) && Number(st.careerXP||0)>=Number(THRESHOLDS[to]||Infinity);
+    if(st.promotionAvailable&&!st.careerPowerAwards[to]){st.careerPowerAwards[to]=true;st.bonusPower=Number(st.bonusPower||0)+25;}
     allStats[key]=st;
     try{ localStorage.setItem(CARD_STATS_KEY,JSON.stringify(allStats)); }catch(e){}
     try{ if(typeof saveCollection==="function") saveCollection(); }catch(e){ console.warn("Evolution save failed",e); }
@@ -8678,11 +8686,13 @@ window.addEventListener("DOMContentLoaded", function(){
     const evolvedCard=function(d){
       let html=String(previousCard.apply(this,arguments));
       const from=currentRarity(d), to=nextRarity(from), st=stats()[cardKey(d)]||{};
-      const uid=String(d.uid||d.id||d.cardId).replace(/'/g,"\\'");
-      if(eligible(d)){
+      const uid=String(d.uid||d.id||d.cardId||cardKey(d)).replace(/'/g,"\\'");
+      if(eligible(d)&&to){
         const button='<button type="button" class="v218EvolveBtn" title="Evolve to '+to+'" onclick="event.stopPropagation(); evolveDriverMonCard(\''+uid+'\')">⭐ EVOLVE DRIVERMON</button>';
         if(html.includes('<div class="v186Promo">')) html=html.replace(/<div class="v186Promo">[\s\S]*?<\/div>/,button);
         else html=html.replace('<div class="power">',button+'<div class="power">');
+      }else if(html.includes('<div class="v186Promo">')){
+        html=html.replace(/<div class="v186Promo">[\s\S]*?<\/div>/,'');
       }
       return html;
     };
@@ -10647,9 +10657,9 @@ img[alt="DriverDex"]{
     raw.battleWins = number(st.wins,0);
     raw.battleCount = number(st.battles,0);
     raw.bonusPower = number(st.bonusPower,0);
-    raw.bonusLevel = number(st.bonusLevel,0);
+    raw.bonusLevel = 0;
     raw.power = Math.round(raw.power + raw.bonusPower);
-    raw.level = Math.round(raw.level + raw.bonusLevel);
+    raw.level = Math.round(raw.level);
     raw.promotionAvailable = !!st.promotionAvailable;
     return raw;
   }
@@ -10740,7 +10750,9 @@ img[alt="DriverDex"]{
   function modifiedScore(card, mod, salt){
     let mult=1; try{ mult=mod.apply(card) || 1; }catch(e){}
     const luck = 0.94 + ((hash(todayKey()+card.uid+salt)%13)/100); // 0.94-1.06 stable daily luck
-    return Math.round(number(card.power,0) * mult * luck);
+    let score=Math.round(number(card.power,0) * mult * luck);
+    try{ if(typeof window.dmDailyDispatchBattleAdjust==="function") score=window.dmDailyDispatchBattleAdjust(card,score); }catch(e){}
+    return score;
   }
   function selectTeam(cards, mod, salt){
     const seenRegions={}; const seenTypes={};
@@ -10778,11 +10790,14 @@ img[alt="DriverDex"]{
       const won = winningUidSet.has(key), trainingProtected=trainingUidSet.has(key); let gain = trainingProtected ? 5 : (won ? 25 : -10);
       if(key===mvpUid) gain += 10;
       if(won && card.power < 1200) gain += 15;
-      st.xp = Math.max(0,number(st.xp,0) + gain); st.careerXP = Math.max(0,number(st.careerXP,0) + gain); st.battles = number(st.battles,0) + 1; if(won) st.wins = number(st.wins,0) + 1;
-      let levelUps=0; let needed=xpNeeded(number(card.level,1)+number(st.bonusLevel,0));
-      while(st.xp >= needed && levelUps < 5){ st.xp -= needed; st.bonusLevel = number(st.bonusLevel,0) + 1; st.bonusPower = number(st.bonusPower,0) + 10; levelUps++; needed=xpNeeded(number(card.level,1)+number(st.bonusLevel,0)); }
-      if(nextRarity(card.rarity) && st.careerXP >= promotionThreshold(card.rarity)) st.promotionAvailable = true;
-      stats[key]=st; updates.push({name:card.name,gain,trainingProtected,levelUps,promotion:st.promotionAvailable,next:nextRarity(card.rarity),xp:st.xp,needed});
+      try{ if(typeof window.dmDailyDispatchExtraXP==="function") gain += Number(window.dmDailyDispatchExtraXP(card,won)||0); }catch(e){}
+      st.careerXP = Math.max(0,number(st.careerXP,0) + gain); st.xp=st.careerXP; st.battles = number(st.battles,0) + 1; if(won) st.wins = number(st.wins,0) + 1;
+      const rarityNow=card.manualRarity||card.rarity||"Bronze", next=nextRarity(rarityNow), needed=promotionThreshold(rarityNow);
+      st.careerPowerAwards=st.careerPowerAwards&&typeof st.careerPowerAwards==="object"?st.careerPowerAwards:{};
+      const canPromote=!!next&&st.careerXP>=needed; let careerPowerAwarded=false;
+      if(canPromote&&!st.careerPowerAwards[rarityNow]){st.careerPowerAwards[rarityNow]=true;st.bonusPower=number(st.bonusPower,0)+25;careerPowerAwarded=true;}
+      st.promotionAvailable=canPromote;
+      stats[key]=st; updates.push({name:card.name,gain,trainingProtected,careerPowerAwarded,promotion:st.promotionAvailable,next,xp:st.careerXP,needed});
     });
     setBattleStats(stats); return updates;
   }
@@ -11019,8 +11034,9 @@ img[alt="DriverDex"]{
     const rewards=awardCardXP(myTeam,winningUidSet,mvpUid,trainingUidSet);
     markDailyBattle(state.opponentId,myTeam);
     const oldRating=getRating(), ratingChange=battleWon?15:-8, newRating=setRating(oldRating+ratingChange);
+    try{ if(typeof window.dmRecordDailyDispatchBattle==="function") window.dmRecordDailyDispatchBattle({battleWon,myTeam,opTeam,rounds,opponentId:state.opponentId,opponentName:state.opp.name||"Opponent"}); }catch(e){ console.log("Daily Dispatch battle update failed",e); }
     pendingManualBattles.delete(token); publish();
-    content.innerHTML=`${modifierHtml(state.mod)}<div class="v185BattlePage"><button class="v185Back" onclick="showLeaderboardTab('battleRating')">← Back to Leaderboard</button><div class="v185BattleTitle">⚔ Battle vs ${esc(state.opp.name||"Opponent")}</div><div class="v185BattleMeta">You chose your attacking team and order. The opponent used the closest available power matches. Result: <b style="color:#ffdf38;">${battleWon?"YOU WON":"YOU LOST"} ${myWins}-${opWins}</b> • Rating ${oldRating} → ${newRating} (${ratingChange>0?"+":""}${ratingChange})</div>${rounds.map((r,i)=>`<div class="v185Round"><div class="v185RoundTitle">Round ${i+1} • ${esc(r.balance.label)}${r.balance.boostPct?` • Underdog boost +${Math.round(r.balance.boostPct*100)}%`:""}${r.balance.trainingProtected?" • Protected training XP":""}</div><div class="v185Vs">${cardMini(r.a,r.as)}<div class="v185Result">${r.win==="me"?"WIN":"LOSE"}<br><small>${r.as} vs ${r.bs}</small></div>${cardMini(r.b,r.bs)}</div>${battleDispatchHtml(r,i)}</div>`).join("")}<div class="v185Summary"><b>Driver XP change</b><div class="v185Rewards">${rewards.map(x=>`<div class="v185Reward"><b>${esc(x.name)}</b><br>${x.gain>0?"+":""}${x.gain} XP${x.trainingProtected?" • protected training": ""}${x.levelUps?`<br>LEVEL UP x${x.levelUps} • +${x.levelUps*10} Power`:""}${x.promotion&&x.next?`<br>⭐ Promotion available to ${esc(x.next)}`:""}</div>`).join("")}</div><div class="v185SmallNote">Your selected attacking cards are now on cooldown until tomorrow. Unselected cards remain available.</div></div></div>`;
+    content.innerHTML=`${modifierHtml(state.mod)}<div class="v185BattlePage"><button class="v185Back" onclick="showLeaderboardTab('battleRating')">← Back to Leaderboard</button><div class="v185BattleTitle">⚔ Battle vs ${esc(state.opp.name||"Opponent")}</div><div class="v185BattleMeta">You chose your attacking team and order. The opponent used the closest available power matches. Result: <b style="color:#ffdf38;">${battleWon?"YOU WON":"YOU LOST"} ${myWins}-${opWins}</b> • Rating ${oldRating} → ${newRating} (${ratingChange>0?"+":""}${ratingChange})</div>${rounds.map((r,i)=>`<div class="v185Round"><div class="v185RoundTitle">Round ${i+1} • ${esc(r.balance.label)}${r.balance.boostPct?` • Underdog boost +${Math.round(r.balance.boostPct*100)}%`:""}${r.balance.trainingProtected?" • Protected training XP":""}</div><div class="v185Vs">${cardMini(r.a,r.as)}<div class="v185Result">${r.win==="me"?"WIN":"LOSE"}<br><small>${r.as} vs ${r.bs}</small></div>${cardMini(r.b,r.bs)}</div>${battleDispatchHtml(r,i)}</div>`).join("")}<div class="v185Summary"><b>Career XP change</b><div class="v185Rewards">${rewards.map(x=>`<div class="v185Reward"><b>${esc(x.name)}</b><br>${x.gain>0?"+":""}${x.gain} Career XP${x.trainingProtected?" • protected training": ""}${x.careerPowerAwarded?`<br>CAREER BAR COMPLETE • +25 permanent Power`:""}${x.promotion&&x.next?`<br>⭐ Promotion available to ${esc(x.next)}`:""}</div>`).join("")}</div><div class="v185SmallNote">Your selected attacking cards are now on cooldown until tomorrow. Unselected cards remain available.</div></div></div>`;
   };
 
   function startBattle(opponentId){
@@ -11786,4 +11802,72 @@ if(dmDexMenuImage) dmDexMenuImage.src='data:image/png;base64,iVBORw0KGgoAAAANSUh
 <!-- v228 is installed last so no older compatibility patch can replace it. -->
 <script>
 if(typeof window.dmV228Install==="function") window.dmV228Install();
+</script>
+
+<!-- v229: Daily Dispatch test — isolated state; never rewrites permanent card data. -->
+<style id="dmDailyDispatchCss">
+  .dmDispatchLaunch{display:flex;align-items:center;justify-content:center;gap:9px;width:100%;min-height:54px;margin:10px 0 2px;padding:9px 14px;border:3px solid #9ee7ff!important;border-radius:14px!important;background:linear-gradient(180deg,#168ee9,#084a9d)!important;color:#fff!important;font-weight:1000!important;font-size:16px!important;box-shadow:0 5px 0 #062754,0 0 18px rgba(41,184,255,.45)!important;text-transform:uppercase;letter-spacing:.5px}.dmDispatchLaunch:hover{transform:translateY(-2px);filter:brightness(1.1)}
+  .dmDispatchOverlay{position:fixed;inset:0;z-index:100000;background:rgba(1,5,18,.92);display:none;overflow:auto;padding:18px}.dmDispatchOverlay.open{display:block}.dmDispatchPanel{position:relative;max-width:920px;margin:0 auto 30px;padding:18px;border:3px solid #ffdf38;border-radius:24px;background:radial-gradient(circle at top right,#173c77 0,#071b3e 32%,#18050a 100%);color:#fff;box-shadow:0 0 35px rgba(255,216,41,.25)}
+  .dmDispatchClose{position:absolute;right:12px;top:12px;width:42px;height:42px;border-radius:50%!important;background:#d20d1c!important;color:white!important;border:2px solid white!important;font-size:25px!important;line-height:1!important}.dmDispatchHeader{text-align:center;padding:5px 48px 14px}.dmDispatchKicker{font-size:12px;font-weight:1000;letter-spacing:1.6px;color:#7ee7ff}.dmDispatchTitle{font-size:34px;font-weight:1000;color:#ffdf38;text-shadow:3px 3px #7f0000;line-height:1}.dmDispatchSub{font-size:13px;font-weight:800;opacity:.82;margin-top:7px}
+  .dmDispatchGrid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.dmDispatchBox{background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.2);border-radius:18px;padding:14px}.dmDispatchBox h3{margin:0 0 10px;color:#ffdf38}.dmWantedCard{display:grid;grid-template-columns:76px 1fr;gap:12px;align-items:center}.dmWantedFace{width:72px;height:72px;border-radius:50%;overflow:hidden;border:3px solid #ffdf38;background:#111;display:flex;align-items:center;justify-content:center;font-size:30px}.dmWantedFace img{width:100%;height:100%;object-fit:cover}.dmWantedName{font-size:22px;font-weight:1000;text-transform:uppercase}.dmWantedBonus{font-size:12px;font-weight:900;color:#aeeaff;margin-top:4px}
+  .dmContract{background:rgba(0,0,0,.28);border-radius:13px;padding:10px;margin:8px 0;border:1px solid rgba(255,255,255,.12)}.dmContract.done{border-color:#43e887;background:rgba(22,120,62,.28)}.dmContractTop{display:flex;justify-content:space-between;gap:10px;font-weight:1000}.dmProgress{height:8px;margin-top:7px;background:#07101f;border-radius:999px;overflow:hidden}.dmProgress i{display:block;height:100%;background:linear-gradient(90deg,#22c7ff,#48ec83);border-radius:inherit}.dmContractSmall{font-size:11px;opacity:.78;margin-top:5px}
+  .dmVaultMeter{height:18px;background:#050b17;border:2px solid rgba(255,255,255,.22);border-radius:999px;overflow:hidden;margin:10px 0}.dmVaultMeter i{display:block;height:100%;background:linear-gradient(90deg,#8c32ff,#ff3d9d,#ffdf38)}.dmVaultCount{font-size:28px;font-weight:1000}.dmVaultClaim{width:100%;background:linear-gradient(180deg,#ffdf38,#ff9900)!important;color:#161000!important;font-weight:1000!important;border:2px solid white!important;border-radius:12px!important}.dmVaultClaim:disabled{filter:grayscale(1);opacity:.55}.dmMoodList{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:7px;max-height:240px;overflow:auto}.dmMood{background:rgba(0,0,0,.25);border-radius:11px;padding:8px;font-size:11px;font-weight:900}.dmMood b{display:block;font-size:12px;color:#fff}.dmMood .up{color:#69f59c}.dmMood .down{color:#ff8a8a}.dmTestTools{margin-top:12px;padding:10px;border:1px dashed #79e5ff;border-radius:12px;background:rgba(0,160,255,.1)}.dmTestTools button{font-size:11px!important;margin:3px!important}.dmDispatchToast{position:fixed;z-index:100002;left:50%;bottom:22px;transform:translateX(-50%);max-width:90%;background:#0c7c42;color:#fff;border:2px solid #9dffc7;border-radius:14px;padding:12px 18px;font-weight:1000;box-shadow:0 8px 25px #000;animation:dmToast 4s forwards}@keyframes dmToast{0%{opacity:0;bottom:0}10%,85%{opacity:1;bottom:22px}100%{opacity:0;bottom:0}}@media(max-width:700px){.dmDispatchGrid{grid-template-columns:1fr}.dmDispatchOverlay{padding:8px}.dmDispatchPanel{padding:12px}.dmDispatchTitle{font-size:27px}}
+  .leaderboardTabs .dmDispatchTab{background:linear-gradient(180deg,#168ee9,#084a9d)!important;color:white!important;border-color:#9ee7ff!important;box-shadow:0 3px 0 #062754!important}.dmCardMood{border:1px solid rgba(255,255,255,.8)!important;border-radius:999px!important;background:rgba(0,0,0,.3)!important;color:white!important;padding:3px 7px!important;margin:0 5px!important;font-size:11px!important;font-weight:1000!important;line-height:1.1!important;white-space:nowrap;box-shadow:none!important}.dmCardMood.up{color:#8dffad!important}.dmCardMood.down{color:#ffaaaa!important}.dmMoodPopup,.dmStarterReveal{position:fixed;inset:0;z-index:100004;background:rgba(0,0,0,.88);display:flex;align-items:center;justify-content:center;padding:18px}.dmMoodPopupCard{width:min(360px,94vw);border:3px solid #9ee7ff;border-radius:22px;background:linear-gradient(160deg,#153e75,#07152f);color:#fff;padding:20px;text-align:center;box-shadow:0 0 35px rgba(70,200,255,.35)}.dmMoodPopupIcon{font-size:58px}.dmMoodPopupName{font-size:25px;font-weight:1000;color:#ffdf38}.dmMoodPopupPower{font-size:22px;font-weight:1000;margin:10px 0}.dmMoodPopupPower.up{color:#74f59e}.dmMoodPopupPower.down{color:#ff8f8f}.dmMoodPopupCard button,.dmRevealClose{background:linear-gradient(180deg,#ffdf38,#ff9b00)!important;color:#111!important;font-weight:1000!important;border:2px solid white!important;border-radius:12px!important}.dmRevealCard{width:min(430px,94vw);max-height:92vh;overflow:auto;border:4px solid #ffdf38;border-radius:28px;background:radial-gradient(circle at top,#174b91,#081a3d 46%,#24060a);color:white;text-align:center;padding:18px;box-shadow:0 0 45px rgba(255,220,50,.5)}.dmRevealKicker{font-size:15px;font-weight:1000;letter-spacing:1.5px;color:#74eaff}.dmRevealTitle{font-size:34px;font-weight:1000;color:#ffdf38;text-shadow:3px 3px #7d0000}.dmRevealFace{width:190px;height:190px;border-radius:50%;overflow:hidden;margin:14px auto 10px;border:6px solid white;background:#111}.dmRevealFace img{width:100%;height:100%;object-fit:cover}.dmRevealName{font-size:29px;font-weight:1000;text-transform:uppercase}.dmRevealMeta{font-size:14px;font-weight:900;color:#aeeaff;margin:5px}.dmRevealPower{display:inline-block;background:rgba(0,0,0,.4);border:2px solid #ffdf38;border-radius:999px;padding:8px 15px;margin:8px;font-size:20px;font-weight:1000}.dmRevealSaved{margin:8px 0 14px;font-size:13px;font-weight:900;color:#82f5a5}@media(max-width:700px){.dmCardMood{font-size:9px!important;padding:3px 5px!important}.card .power{font-size:13px}.leaderboardTabs .dmDispatchTab{min-width:0!important}}
+</style>
+<script>
+(function(){
+  "use strict";
+  const STORE="drivermonDailyDispatch_v229";
+  const MOODS=[
+    {name:"Caffeinated",icon:"☕",stat:"Speed",powerDelta:250},
+    {name:"Focused",icon:"🎯",stat:"Reliability",powerDelta:175},
+    {name:"Friendly",icon:"😁",stat:"Care",powerDelta:150},
+    {name:"In The Zone",icon:"🔥",stat:"Efficiency",powerDelta:400},
+    {name:"Suspiciously Motivated",icon:"👀",stat:"Speed",powerDelta:275},
+    {name:"Angry",icon:"😡",stat:"Care",powerDelta:-250},
+    {name:"Hungover",icon:"🤢",stat:"Reliability",powerDelta:-400},
+    {name:"Lost",icon:"🗺️",stat:"Efficiency",powerDelta:-325},
+    {name:"Hangry",icon:"🍔",stat:"Speed",powerDelta:-200}
+  ];
+  function hash(s){let h=2166136261;for(let i=0;i<String(s).length;i++){h^=String(s).charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0}
+  function dayKey(){const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
+  function dayNumber(){const d=new Date();return Math.floor(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())/86400000)}
+  function cycleKey(){return "c"+Math.floor(dayNumber()/3)}
+  function cardKey(c){return String((c&&(c.originalStarterUid||c.uid||c.imageKey||c.name))||"unknown")}
+  function faceList(){try{if(typeof faceImages!=="undefined"&&Array.isArray(faceImages))return faceImages}catch(e){}try{if(Array.isArray(window.faceImages))return window.faceImages}catch(e){}return []}
+  function fullList(){try{if(typeof fullImages!=="undefined"&&Array.isArray(fullImages))return fullImages}catch(e){}try{if(Array.isArray(window.fullImages))return window.fullImages}catch(e){}return []}
+  function faceFor(c){if(!c)return "";if(c._starterFaceImage)return c._starterFaceImage;if(c.cardFaceData)return c.cardFaceData;const i=Number(c.imageFaceIndex!=null?c.imageFaceIndex:c.img);try{return faceList()[i]||""}catch(e){return ""}}
+  function load(){try{const x=JSON.parse(localStorage.getItem(STORE)||"{}");x.vaultPoints=Number(x.vaultPoints||0);x.cycles=x.cycles||{};x.history=x.history||[];return x}catch(e){return {vaultPoints:0,cycles:{},history:[]}}}
+  function save(s){try{localStorage.setItem(STORE,JSON.stringify(s))}catch(e){console.log("Daily Dispatch save failed",e)}}
+  function progress(s){const k=cycleKey(),p=s.cycles[k]||(s.cycles[k]={battles:0,wins:0,used:{},angryWins:0,paid:{},fullPaid:false});p.battles=Number(p.battles||0);p.wins=Number(p.wins||0);p.used=p.used||{};p.angryWins=Number(p.angryWins||(p.angryWin?1:0));p.paid=p.paid||{};return p}
+  function owned(){try{if(typeof drivers!=="undefined"&&Array.isArray(drivers))return drivers}catch(e){}try{if(Array.isArray(window.drivers))return window.drivers}catch(e){}return []}
+  function moodFor(c){const own=owned();if(own.length){const angry=own[hash("angry|"+dayKey())%own.length];if(cardKey(c)===cardKey(angry))return MOODS.find(m=>m.name==="Angry")}return MOODS[hash(dayKey()+"|"+cardKey(c))%MOODS.length]}
+  function wanted(){const own=owned();const starters=Array.isArray(window.DRIVERMON_STARTER_BUNDLES)?window.DRIVERMON_STARTER_BUNDLES:[];const pool=own.length?own:starters;return pool.length?pool[hash("wanted|"+dayKey())%pool.length]:null}
+  function sameCard(a,b){return !!a&&!!b&&(cardKey(a)===cardKey(b)||String(a.name||"").trim().toLowerCase()===String(b.name||"").trim().toLowerCase())}
+  function contracts(p){return [
+    {id:"battles",title:"Complete 8 battles",now:Math.min(8,p.battles||0),goal:8,reward:5,done:(p.battles||0)>=8},
+    {id:"wins",title:"Win 4 battles",now:Math.min(4,p.wins||0),goal:4,reward:6,done:(p.wins||0)>=4},
+    {id:"angry",title:"Win 2 battles with an Angry Driver",now:Math.min(2,p.angryWins||0),goal:2,reward:7,done:(p.angryWins||0)>=2}
+  ]}
+  function settle(s,p){let got=0;const cs=contracts(p);cs.forEach(c=>{if(c.done&&!p.paid[c.id]){p.paid[c.id]=true;s.vaultPoints+=c.reward;got+=c.reward}});if(cs.every(c=>c.done)&&!p.fullPaid){p.fullPaid=true;s.vaultPoints+=2;got+=2}save(s);return got}
+  function toast(msg){const old=document.querySelector(".dmDispatchToast");if(old)old.remove();const el=document.createElement("div");el.className="dmDispatchToast";el.textContent=msg;document.body.appendChild(el);setTimeout(()=>el.remove(),4200)}
+  window.dmDailyMoodForCard=moodFor;
+  window.dmDailyDispatchBattleAdjust=function(card,score){const m=moodFor(card),w=wanted();let adjusted=Number(score||0)+Number(m.powerDelta||0);if(sameCard(card,w))adjusted*=1.10;return Math.max(1,Math.round(adjusted))};
+  window.dmDailyDispatchExtraXP=function(card){return sameCard(card,wanted())?10:0};
+  window.dmRecordDailyDispatchBattle=function(info){const s=load(),p=progress(s),team=info&&info.myTeam||[];p.battles++;if(info&&info.battleWon)p.wins++;team.forEach(c=>p.used[cardKey(c)]=true);if(info&&info.battleWon&&team.some(c=>moodFor(c).name==="Angry"))p.angryWins++;const got=settle(s,p);render();toast(got?"Daily Dispatch: contract reward +"+got+" Vault points!":"Daily Dispatch progress updated");return got};
+  function starterPower(card){try{if(typeof calc==="function")return Number((calc(card)||{}).score||0)}catch(e){}return Number(card&&card.power||0)}
+  function showStarterReveal(card){const old=document.getElementById("dmStarterReveal");if(old)old.remove();const el=document.createElement("div");el.id="dmStarterReveal";el.className="dmStarterReveal";const face=faceFor(card),power=starterPower(card);el.innerHTML=`<div class="dmRevealCard"><div class="dmRevealKicker">STARTER VAULT REWARD</div><div class="dmRevealTitle">🎉 UNLOCKED!</div><div class="dmRevealFace">${face?`<img src="${esc(face)}" alt="${esc(card.name)}">`:"?"}</div><div class="dmRevealName">${esc(card.name||"Mystery Starter")}${card.shiny?" ✨":""}</div><div class="dmRevealMeta">${card.shiny?"SHINY • ":""}Starter Drivermon</div><div class="dmRevealPower">⭐ ${power.toLocaleString()} POWER</div><div class="dmRevealSaved">✓ This exact card and its artwork have already been added to your collection.</div><button class="dmRevealClose" type="button">Awesome — show my Dispatch</button></div>`;el.addEventListener("click",e=>{if(e.target===el||e.target.closest(".dmRevealClose"))el.remove()});document.body.appendChild(el)}
+  function addStarterReward(){const s=load();if(s.vaultPoints<100){toast("You need 100 Vault points first");return}const pool=Array.isArray(window.DRIVERMON_STARTER_BUNDLES)?window.DRIVERMON_STARTER_BUNDLES:[];if(!pool.length){toast("Starter Vault is not ready on this version");return}const template=pool[Math.floor(Math.random()*pool.length)],card=JSON.parse(JSON.stringify(template));const stamp=Date.now().toString(36)+Math.random().toString(36).slice(2,6);card.originalStarterUid=template.originalStarterUid||template.uid;card.uid="starter_reward_"+stamp;card.imageKey="starter_reward_art_"+stamp;card.starterCard=true;card.shiny=Math.random()<1/50;delete card.region;delete card.country;const face=template._starterFaceImage||faceFor(template),full=template._starterFullImage||face;card._starterFaceImage=face;card._starterFullImage=full;card.cardFaceData=face;card.cardFullData=full;const faces=faceList(),fulls=fullList(),collection=owned();if(!collection.length&&!(typeof drivers!=="undefined"&&Array.isArray(drivers))&&!Array.isArray(window.drivers)){toast("Your collection is not ready yet — please try again");return}const idx=faces.length;faces.push(face);fulls.push(full);card.img=idx;card.imageFaceIndex=idx;card.imageFullIndex=idx;collection.push(card);try{if(window.dmV226Core&&window.dmV226Core.bindArtwork)window.dmV226Core.bindArtwork();if(typeof window.saveCollection==="function")window.saveCollection();if(typeof window.renderCards==="function")window.renderCards();if(typeof window.publishToDriverDex==="function")window.publishToDriverDex(card)}catch(e){console.log("Starter reward save follow-up",e)}s.vaultPoints-=100;s.history.push({at:new Date().toISOString(),name:card.name,uid:card.uid,shiny:!!card.shiny});save(s);render();showStarterReveal(card)}
+  function esc(v){return String(v==null?"":v).replace(/[&<>\"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+  function render(){const root=document.getElementById("dmDailyDispatchContent");if(!root)return;const s=load(),p=progress(s),w=wanted(),cs=contracts(p),days=3-(dayNumber()%3),moods=owned().slice(0,30).map(c=>({c,m:moodFor(c)}));root.innerHTML=`<div class="dmDispatchHeader"><div class="dmDispatchKicker">TODAY'S SIDE HUSTLE</div><div class="dmDispatchTitle">DAILY DISPATCH</div><div class="dmDispatchSub">${esc(dayKey())} • Three-day contracts reset in ${days} day${days===1?"":"s"}</div></div><div class="dmDispatchGrid"><section class="dmDispatchBox"><h3>🎯 Wanted Driver</h3><div class="dmWantedCard"><div class="dmWantedFace">${w&&faceFor(w)?`<img src="${esc(faceFor(w))}" alt="${esc(w.name)}">`:"?"}</div><div><div class="dmWantedName">${esc(w&&w.name||"No driver yet")}</div><div class="dmWantedBonus">+10% battle power and +10 XP today when used</div></div></div></section><section class="dmDispatchBox"><h3>📋 Hard Three-Day Contracts</h3>${cs.map(c=>`<div class="dmContract ${c.done?"done":""}"><div class="dmContractTop"><span>${c.done?"✅":"⬜"} ${esc(c.title)}</span><span>+${c.reward}</span></div><div class="dmProgress"><i style="width:${Math.round(100*c.now/c.goal)}%"></i></div><div class="dmContractSmall">${c.now}/${c.goal} • Vault points awarded once</div></div>`).join("")}<div class="dmContractSmall">Complete all three for +2 bonus points. A perfect set is worth 20.</div></section><section class="dmDispatchBox"><h3>🎭 Today's Driver Moods</h3><div class="dmContractSmall" style="margin-bottom:8px">Moods change battle power for today only. Permanent card ratings stay untouched.</div><div class="dmMoodList">${moods.length?moods.map(x=>`<div class="dmMood"><b>${x.m.icon} ${esc(x.c.name)}</b>${esc(x.m.name)} • ${esc(x.m.stat)} affected • <span class="${x.m.powerDelta>0?"up":"down"}">${x.m.powerDelta>0?"+":""}${x.m.powerDelta} Power</span></div>`).join(""):"Create or claim cards to see their moods."}</div></section><section class="dmDispatchBox"><h3>🔐 Starter Vault</h3><div class="dmVaultCount">${s.vaultPoints} / 100</div><div class="dmVaultMeter"><i style="width:${Math.min(100,s.vaultPoints)}%"></i></div><p style="font-size:12px;font-weight:800">A perfect contract set is worth 20 points, so strong play unlocks roughly one random Starter card every 15 days. Duplicates are possible; Shiny chance is 1 in 50.</p><button class="dmVaultClaim" ${s.vaultPoints<100?"disabled":""} onclick="dmClaimStarterVault()">🎁 Unlock Random Starter</button>${location.protocol==="file:"?`<div class="dmTestTools"><b>🧪 Preview test controls</b><br><button onclick="dmTestDispatchProgress()">Complete test contracts</button><button onclick="dmTestVaultPoints()">+25 test points</button></div>`:""}</section></div>`}
+  window.dmClaimStarterVault=addStarterReward;
+  window.dmTestDispatchProgress=function(){const s=load(),p=progress(s);p.battles=Math.max(8,p.battles);p.wins=Math.max(4,p.wins);p.angryWins=Math.max(2,p.angryWins);const got=settle(s,p);render();toast("Test contracts completed"+(got?" • +"+got+" points":""))};
+  window.dmTestVaultPoints=function(){const s=load();s.vaultPoints+=25;save(s);render();toast("Added 25 test Vault points")};
+  window.openDailyDispatch=function(){document.getElementById("dmDailyDispatchOverlay").classList.add("open");document.body.style.overflow="hidden";render()};window.closeDailyDispatch=function(){document.getElementById("dmDailyDispatchOverlay").classList.remove("open");document.body.style.overflow=""};
+  function showMoodPopup(key){const c=owned().find(x=>cardKey(x)===String(key));if(!c)return;const m=moodFor(c),old=document.getElementById("dmMoodPopup");if(old)old.remove();let base=0;try{if(typeof calc==="function")base=Number((calc(c)||{}).score||0)}catch(e){}const after=Math.max(1,base+Number(m.powerDelta||0)),el=document.createElement("div");el.id="dmMoodPopup";el.className="dmMoodPopup";el.innerHTML=`<div class="dmMoodPopupCard"><div class="dmMoodPopupIcon">${m.icon}</div><div class="dmMoodPopupName">${esc(m.name)}</div><p><b>${esc(c.name)}</b> has ${esc(m.stat)} affected today.</p><div class="dmMoodPopupPower ${m.powerDelta>0?"up":"down"}">${m.powerDelta>0?"+":""}${m.powerDelta} BATTLE POWER</div>${base?`<p>Normal ${base.toLocaleString()} → Mood power ${after.toLocaleString()}</p>`:""}<small>This resets tomorrow and never changes the permanent card.</small><br><br><button type="button">Got it</button></div>`;el.addEventListener("click",e=>{if(e.target===el||e.target.closest("button"))el.remove()});document.body.appendChild(el)}
+  function installCardMoodLayer(){const oldCard=window.card;if(typeof oldCard!=="function"||oldCard.__dmMoodWrapped)return;const wrapped=function(d){let html=oldCard.apply(this,arguments),m=moodFor(d),key=esc(cardKey(d));const badge=`<button type="button" class="dmCardMood ${m.powerDelta>0?"up":"down"}" data-dm-mood-key="${key}" title="${esc(m.name)}: ${m.powerDelta>0?"+":""}${m.powerDelta} battle power">${m.icon} ${m.powerDelta>0?"+":""}${m.powerDelta}</button>`;return String(html).replace(/<div class="power"><span>⭐ POWER<\/span>/,`<div class="power"><span>⭐ POWER</span>${badge}`)};wrapped.__dmMoodWrapped=true;window.card=wrapped;try{if(typeof window.renderCards==="function")window.renderCards()}catch(e){console.log("Daily mood card refresh",e)}}
+  function installLeaderboardButton(){const tabs=document.querySelector(".leaderboardTabs");if(!tabs)return;let btn=tabs.querySelector("[data-dm-dispatch-tab]");if(!btn){btn=document.createElement("button");btn.type="button";btn.className="dmDispatchTab";btn.setAttribute("data-dm-dispatch-tab","1");btn.textContent="📻 Dispatch";btn.onclick=e=>{e.preventDefault();e.stopPropagation();window.openDailyDispatch()}}const battle=tabs.querySelector("[data-v199-battle-tab]");if(battle&&battle.nextSibling!==btn)tabs.insertBefore(btn,battle.nextSibling);else if(!btn.parentNode)tabs.insertBefore(btn,tabs.firstChild||null)}
+  function install(){if(document.getElementById("dmDailyDispatchOverlay"))return;const overlay=document.createElement("div");overlay.id="dmDailyDispatchOverlay";overlay.className="dmDispatchOverlay";overlay.innerHTML='<div class="dmDispatchPanel"><button class="dmDispatchClose" onclick="closeDailyDispatch()" aria-label="Close">×</button><div id="dmDailyDispatchContent"></div></div>';overlay.addEventListener("click",e=>{if(e.target===overlay)closeDailyDispatch()});document.body.appendChild(overlay);document.addEventListener("click",e=>{const b=e.target&&e.target.closest?e.target.closest("[data-dm-mood-key]"):null;if(!b)return;e.preventDefault();e.stopPropagation();showMoodPopup(b.getAttribute("data-dm-mood-key"))},true);installCardMoodLayer();installLeaderboardButton();const oldOpen=window.openLeaderboard;if(typeof oldOpen==="function"&&!oldOpen.__dmDispatchWrapped){const wrapped=function(){const out=oldOpen.apply(this,arguments);setTimeout(installLeaderboardButton,0);setTimeout(installLeaderboardButton,300);return out};wrapped.__dmDispatchWrapped=true;window.openLeaderboard=wrapped}render()}
+  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",install);else install();
+})();
 </script>
