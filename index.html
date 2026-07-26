@@ -870,6 +870,21 @@ window.dmV228Install=function(){
     try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
     return true;
   }
+  async function applyImportedPayload(payload){
+    if(!payload||!Array.isArray(payload.drivers)||!payload.drivers.length) return false;
+    const cards=list();
+    cards.splice(0,cards.length,...payload.drivers.map(card=>Object.assign({},card)));
+    try{ if(typeof nextUid!=="undefined"&&payload.nextUid) nextUid=Math.max(Number(payload.nextUid)||21,21); }catch(e){}
+    // A portable backup carries its artwork with it. Bind and save that artwork
+    // before reading this device's old image database, so an existing test card
+    // can never replace an imported card's face or original screenshot.
+    bindArtwork(artworkMap(payload));
+    await persistArtwork();
+    const saved=saveLocal();
+    try{ if(typeof renderCards==="function") renderCards(); }catch(e){}
+    await saveCloud("verified-portable-restore");
+    return !!(saved&&saved.drivers&&saved.drivers.length===payload.drivers.length);
+  }
   async function safeStartupLoad(){
     installFirebaseGuard();
     const current=parsed(localStorage.getItem(COLLECTION_KEY));
@@ -936,6 +951,16 @@ window.dmV228Install=function(){
     setTimeout(hydrateArtwork,2300);
   });
   window.addEventListener("beforeunload",()=>{ if(list().length) saveLocal(); });
+  window.dmV228Core={
+    bindArtwork,
+    persistArtwork,
+    hydrateArtwork,
+    saveLocal,
+    saveCloud,
+    applyPayload,
+    applyImportedPayload,
+    cards:list
+  };
   console.info("DriverMon build",BUILD);
 };
 </script>
@@ -11893,14 +11918,58 @@ if(dmDexMenuImage) dmDexMenuImage.src='data:image/png;base64,iVBORw0KGgoAAAANSUh
 <script>
 (function(){
   const FORMAT="DriverMonBackup";
-  const VERSION=220;
+  const VERSION=230;
+  const COLLECTION_KEYS=new Set([
+    "drivermon_collection_v1",
+    "drivermon_collection_v1_backup",
+    "drivermon_collection_v1_last_non_empty"
+  ]);
+  function validImage(value){ return typeof value==="string"&&value.startsWith("data:image"); }
+  function cardUid(card,index){
+    if(!card.uid) card.uid="card_backup_"+Date.now().toString(36)+"_"+index+"_"+Math.random().toString(36).slice(2,7);
+    return String(card.uid);
+  }
+  function artworkFor(collection){
+    const map={},faces=Array.isArray(collection&&collection.faceImages)?collection.faceImages:[];
+    const fulls=Array.isArray(collection&&collection.fullImages)?collection.fullImages:[];
+    const explicit=collection&&collection.artworkByUid&&typeof collection.artworkByUid==="object"?collection.artworkByUid:{};
+    (collection&&collection.drivers||[]).forEach((card,index)=>{
+      if(!card) return;
+      const uid=cardUid(card,index),saved=explicit[uid]||{};
+      const faceIndex=Number(card.imageFaceIndex!=null?card.imageFaceIndex:(card.img!=null?card.img:index));
+      const fullIndex=Number(card.imageFullIndex!=null?card.imageFullIndex:(card.img!=null?card.img:index));
+      const face=saved.face||card.cardFaceData||card._starterFaceImage||faces[faceIndex]||"";
+      const full=saved.full||card.cardFullData||card._starterFullImage||fulls[fullIndex]||"";
+      map[uid]={face:validImage(face)?face:"",full:validImage(full)?full:""};
+    });
+    return map;
+  }
+  function normaliseCollection(collection){
+    const copy=JSON.parse(JSON.stringify(collection||{}));
+    copy.drivers=Array.isArray(copy.drivers)?copy.drivers:[];
+    copy.drivers.forEach(cardUid);
+    copy.artworkByUid=artworkFor(copy);
+    // Keep one UID-keyed copy of each image. This prevents very large phone
+    // backups and removes the old position-based image links entirely.
+    copy.drivers.forEach(card=>{
+      delete card.cardFaceData;
+      delete card.cardFullData;
+      delete card._starterFaceImage;
+      delete card._starterFullImage;
+    });
+    copy.faceImages=[];
+    copy.fullImages=[];
+    copy.version=230;
+    copy.build="230-verified-portable-restore";
+    return copy;
+  }
   function runtimeCollection(){
     let ds=[],faces=[],fulls=[],uid=null;
     try{ if(typeof drivers!=="undefined"&&Array.isArray(drivers)) ds=drivers; }catch(e){}
     try{ if(typeof faceImages!=="undefined"&&Array.isArray(faceImages)) faces=faceImages; }catch(e){}
     try{ if(typeof fullImages!=="undefined"&&Array.isArray(fullImages)) fulls=fullImages; }catch(e){}
     try{ if(typeof nextUid!=="undefined") uid=nextUid; }catch(e){}
-    return {drivers:JSON.parse(JSON.stringify(ds)),faceImages:faces.slice(),fullImages:fulls.slice(),nextUid:uid,savedAt:new Date().toISOString()};
+    return normaliseCollection({drivers:JSON.parse(JSON.stringify(ds)),faceImages:faces.slice(),fullImages:fulls.slice(),nextUid:uid,savedAt:new Date().toISOString()});
   }
   function includedKey(key){ return /drivermon|driverMon|playerProfile|homeRegion|playerId/i.test(String(key||"")); }
   function makeBackup(){
@@ -11918,27 +11987,98 @@ if(dmDexMenuImage) dmDexMenuImage.src='data:image/png;base64,iVBORw0KGgoAAAANSUh
     a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
   }
   window.exportDriverMonBackup=function(){
-    try{ download(makeBackup(),filename("DriverMon-Backup")); alert("DriverMon backup downloaded. Keep this file somewhere safe or send it to your other device."); }
+    try{
+      const backup=makeBackup(),count=backup.collection.drivers.length;
+      if(!count){ alert("There are no DriverMon cards to back up, so no empty backup was downloaded."); return; }
+      download(backup,filename("DriverMon-Backup"));
+      alert("Backup downloaded with "+count+" DriverMon cards. Keep this file somewhere safe or send it to your other device.");
+    }
     catch(e){ console.warn("Backup export failed",e); alert("The backup could not be created on this browser."); }
   };
+  function parsedCollection(raw){
+    try{ const value=typeof raw==="string"?JSON.parse(raw):raw; return value&&Array.isArray(value.drivers)?value:null; }
+    catch(e){ return null; }
+  }
+  function bestCollection(backup){
+    const storage=backup&&backup.localStorage||{};
+    const candidates=[
+      parsedCollection(backup&&backup.collection),
+      parsedCollection(storage.drivermon_collection_v1),
+      parsedCollection(storage.drivermon_collection_v1_last_non_empty),
+      parsedCollection(storage.drivermon_collection_v1_backup)
+    ].filter(Boolean);
+    candidates.sort((a,b)=>{
+      const count=(x)=>x.drivers.length;
+      const art=(x)=>Object.values(artworkFor(x)).reduce((n,item)=>n+(item.face?1:0)+(item.full?3:0),0);
+      return count(b)-count(a)||art(b)-art(a);
+    });
+    return candidates[0]||null;
+  }
+  function storedCount(){
+    try{ const value=JSON.parse(localStorage.getItem("drivermon_collection_v1")||"null"); return value&&Array.isArray(value.drivers)?value.drivers.length:0; }
+    catch(e){ return 0; }
+  }
   window.importDriverMonBackup=function(input){
     const file=input&&input.files&&input.files[0]; if(!file) return;
     const reader=new FileReader();
-    reader.onload=function(){
+    reader.onload=async function(){
+      let previousCollection=null,previousSettings=null;
       try{
         const backup=JSON.parse(String(reader.result||""));
-        if(!backup||backup.format!==FORMAT||!backup.collection||!Array.isArray(backup.collection.drivers)) throw new Error("Invalid backup");
-        const count=backup.collection.drivers.length;
+        if(!backup||backup.format!==FORMAT) throw new Error("Invalid backup");
+        const chosen=bestCollection(backup);
+        if(!chosen||!chosen.drivers.length){
+          alert("This backup contains no DriverMon cards, so nothing was changed on this device.");
+          return;
+        }
+        const collection=normaliseCollection(chosen),count=collection.drivers.length;
         if(!confirm("Restore "+count+" DriverMon cards from this backup?\n\nThis will replace the collection currently on this device.")) return;
+        previousCollection=runtimeCollection();
+        previousSettings={};
         download(makeBackup(),filename("DriverMon-Before-Restore"));
-        const remove=[]; for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(includedKey(k)) remove.push(k); }
-        remove.forEach(k=>localStorage.removeItem(k));
-        Object.keys(backup.localStorage||{}).forEach(k=>{ if(includedKey(k)&&backup.localStorage[k]!=null) localStorage.setItem(k,String(backup.localStorage[k])); });
-        localStorage.setItem("drivermon_collection_v1",JSON.stringify(backup.collection));
-        localStorage.setItem("drivermon_collection_v1_backup",JSON.stringify(backup.collection));
-        alert("Backup restored successfully. DriverMon will now reload.");
-        location.reload();
-      }catch(e){ console.warn("Backup import failed",e); alert("This does not appear to be a valid DriverMon backup file."); }
+        // Restore the backed-up player identity/settings, but never wipe keys
+        // that are absent from the file and never let an older stored collection
+        // overwrite the verified collection selected above.
+        Object.keys(backup.localStorage||{}).forEach(k=>{
+          if(includedKey(k)&&!COLLECTION_KEYS.has(k)&&backup.localStorage[k]!=null){
+            previousSettings[k]=localStorage.getItem(k);
+            localStorage.setItem(k,String(backup.localStorage[k]));
+          }
+        });
+        const core=window.dmV228Core;
+        let applied=false;
+        if(core&&typeof core.applyImportedPayload==="function"){
+          applied=await core.applyImportedPayload(collection);
+        }else if(window.dmV226Core&&typeof window.dmV226Core.applyPayload==="function"){
+          applied=window.dmV226Core.applyPayload(collection,false);
+          if(applied&&typeof window.saveCollection==="function") window.saveCollection();
+        }
+        const liveCount=core&&typeof core.cards==="function"?core.cards().length:storedCount();
+        const diskCount=storedCount();
+        if(!applied||liveCount!==count||diskCount!==count) throw new Error("Restore verification failed: expected "+count+", live "+liveCount+", saved "+diskCount);
+        localStorage.setItem("drivermonLastVerifiedRestore_v230",JSON.stringify({count,restoredAt:new Date().toISOString()}));
+        alert(count+" DriverMon cards restored and verified. They are now in your collection on this device.");
+      }catch(e){
+        console.warn("Backup import failed",e);
+        // A failed verification must be reversible. Restore the identity first
+        // so the previous collection is saved back to its original player.
+        if(previousSettings){
+          Object.keys(previousSettings).forEach(k=>{
+            if(previousSettings[k]===null) localStorage.removeItem(k);
+            else localStorage.setItem(k,previousSettings[k]);
+          });
+        }
+        try{
+          const core=window.dmV228Core;
+          if(previousCollection&&previousCollection.drivers.length&&core&&typeof core.applyImportedPayload==="function"){
+            await core.applyImportedPayload(previousCollection);
+          }
+        }catch(rollbackError){ console.warn("Backup rollback failed",rollbackError); }
+        const detail=e&&e.message&&String(e.message).startsWith("Restore verification failed")
+          ? "Restore stopped because the cards could not be verified. Your previous collection has been kept."
+          : "This does not appear to be a valid DriverMon backup file.";
+        alert(detail);
+      }
       finally{ if(input) input.value=""; }
     };
     reader.onerror=function(){ alert("The selected backup file could not be read."); if(input) input.value=""; };
