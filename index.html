@@ -11986,14 +11986,38 @@ if(dmDexMenuImage) dmDexMenuImage.src='data:image/png;base64,iVBORw0KGgoAAAANSUh
     const url=URL.createObjectURL(blob),a=document.createElement("a");
     a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
   }
-  window.exportDriverMonBackup=function(){
+  function isApplePhone(){
+    return /iPad|iPhone|iPod/i.test(navigator.userAgent||"")||(navigator.platform==="MacIntel"&&navigator.maxTouchPoints>1);
+  }
+  async function exportFile(data,name,count){
+    const text=JSON.stringify(data);
+    if(isApplePhone()&&typeof File==="function"&&navigator.share&&navigator.canShare){
+      const file=new File([text],name,{type:"application/json"});
+      if(navigator.canShare({files:[file]})){
+        await navigator.share({
+          files:[file],
+          title:"DriverMon Backup",
+          text:"DriverMon collection backup with "+count+" cards. Choose Save to Files to keep it on this iPhone."
+        });
+        return "shared";
+      }
+    }
+    download(data,name);
+    return "downloaded";
+  }
+  window.exportDriverMonBackup=async function(){
     try{
       const backup=makeBackup(),count=backup.collection.drivers.length;
       if(!count){ alert("There are no DriverMon cards to back up, so no empty backup was downloaded."); return; }
-      download(backup,filename("DriverMon-Backup"));
-      alert("Backup downloaded with "+count+" DriverMon cards. Keep this file somewhere safe or send it to your other device.");
+      const method=await exportFile(backup,filename("DriverMon-Backup"),count);
+      if(method==="shared") alert("Backup prepared with "+count+" DriverMon cards. If you chose Save to Files, select it from that folder when importing.");
+      else alert("Backup downloaded with "+count+" DriverMon cards. Keep this file somewhere safe or send it to your other device.");
     }
-    catch(e){ console.warn("Backup export failed",e); alert("The backup could not be created on this browser."); }
+    catch(e){
+      console.warn("Backup export failed",e);
+      if(e&&e.name==="AbortError") alert("Backup sharing was cancelled, so no backup file was saved.");
+      else alert("The backup could not be created on this browser.");
+    }
   };
   function parsedCollection(raw){
     try{ const value=typeof raw==="string"?JSON.parse(raw):raw; return value&&Array.isArray(value.drivers)?value:null; }
