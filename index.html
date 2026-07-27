@@ -1574,7 +1574,7 @@ window.dmV228Install=function(){
 <div class="dmBackupButtons">
   <button type="button" onclick="exportDriverMonBackup()">⬇ Export Backup</button>
   <button type="button" onclick="document.getElementById('dmBackupImportFile').click()">⬆ Import Backup</button>
-  <input id="dmBackupImportFile" type="file" accept=".drivermon,.json,application/json" hidden onchange="importDriverMonBackup(this)">
+  <input id="dmBackupImportFile" type="file" hidden onchange="importDriverMonBackup(this)">
 </div>
 
 </div>
@@ -11992,12 +11992,14 @@ if(dmDexMenuImage) dmDexMenuImage.src='data:image/png;base64,iVBORw0KGgoAAAANSUh
   async function exportFile(data,name,count){
     const text=JSON.stringify(data);
     if(isApplePhone()&&typeof File==="function"&&navigator.share&&navigator.canShare){
-      const file=new File([text],name,{type:"application/json"});
+      // iOS Files recognises .json reliably. A custom .drivermon extension can
+      // appear greyed out even though the contents are valid JSON.
+      const appleName=String(name).replace(/\.drivermon$/i,".json");
+      const file=new File([text],appleName,{type:"application/json"});
       if(navigator.canShare({files:[file]})){
         await navigator.share({
           files:[file],
-          title:"DriverMon Backup",
-          text:"DriverMon collection backup with "+count+" cards. Choose Save to Files to keep it on this iPhone."
+          title:"DriverMon Backup"
         });
         return "shared";
       }
